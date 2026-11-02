@@ -105,7 +105,16 @@ jobs:
           key: ${{ steps.key.outputs.nar-key }}
       - name: Realise shells + export closures (skipped on cache hit)
         if: steps.nar.outputs.cache-hit != 'true'
-        run: bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE"
+        run: |
+          # Run the export AS vscode, who owns the single-user Nix
+          # store. Runs 41516480304..41521687044 all realised as root
+          # (or under BuildKit) and died on the same libstore SQLite
+          # assertion ~50-60s into code's shell; fleet CI, which runs
+          # nix as the store's owner, does this daily without it.
+          mkdir -p nar-cache
+          chown vscode:vscode nar-cache
+          runuser -u vscode -- env HOME=/home/vscode GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            bash -lc 'cd "$GITHUB_WORKSPACE" && bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE"'
 
   build-full:
     needs: warm-export
