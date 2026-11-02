@@ -38,7 +38,9 @@ while read -r repo opt; do
   ok=""
   for attempt in 1 2; do
     if out=$(nix build --accept-flake-config --no-link --print-out-paths "$dir#devShells.x86_64-linux.default" 2>&1); then ok=1; break; fi
-    echo "export: $repo attempt $attempt failed:"; echo "$out" | tail -5
+    # Print the HEAD of the failure (the actual error) — v2 printed only
+    # the tail, which was an anonymous stack trace (run 41521687044).
+    echo "export: $repo attempt $attempt failed:"; echo "$out" | grep -vE "^[0-9]+# " | head -25
   done
   if [ -z "$ok" ]; then
     [ "${opt:-}" = "optional" ] && { echo "export: $repo FAILED (optional, continuing)"; continue; }
