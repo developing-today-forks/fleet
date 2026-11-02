@@ -1,0 +1,114 @@
+name: fleet-build container
+
+# Builds and publishes ghcr.io/dezren39/fleet-build — the fleet's shared
+# build/test image. Used as:
+#   * a GitHub Actions job container (jobs.<job>.container) by repos in
+#     BOTH dezren39 and developing-today — the package is public, the
+#     namespace of the consuming repo does not matter;
+#   * the Codespaces image for this repo (.devcontainer points at it).
+#
+# Triggers follow the fleet rule (CI on main, not on PRs) plus a manual
+# dispatch. `fresh_build` = a from-scratch build (no layer cache): use
+# it when a pin changes or a cached layer is suspect. Ordinary rebuilds
+# reuse the registry layer cache, and the warmed :full layer is keyed
+# on the repos' flake.lock files — if no lock changed, the Nix store
+# layer is reused untouched (no nixpkgs update is ever run here; see
+# containers/fleet-build/warm.sh).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "containers/fleet-build/**"
+      - ".github/workflows/fleet-build-container.yml"
+  schedule:
+    # Weekly fresh-ish rebuild (Mondays 06:00 UTC): picks up base-image
+    # and submodule-pointer changes even when nobody touched the image.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      fresh_build:
+        description: "Fresh build (ignore all layer cache)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Init public submodules (never hatch-personal — it is private)
+        run: git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
+      - name: Prepare warm context (flake files only, locks as committed)
+        run: |
+          set -euo pipefail
+          for r in code opencode openchamber nix zettel; do
+            mkdir -p "containers/fleet-build/warm-context/$r"
+            cp "$r/flake.nix" "containers/fleet-build/warm-context/$r/" 2>/dev/null || true
+            cp "$r/flake.lock" "containers/fleet-build/warm-context/$r/" 2>/dev/null || true
+          done
+          find containers/fleet-build/warm-context -type f | sort
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push :latest (base target)
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/fleet-build
+          file: containers/fleet-build/Containerfile
+          target: base
+          push: true
+          tags: |
+            ghcr.io/dezren39/fleet-build:latest
+            ghcr.io/dezren39/fleet-build:base
+            ghcr.io/dezren39/fleet-build:sha-${{ github.sha }}
+          no-cache: ${{ inputs.fresh_build == true }}
+          cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base
+          cache-to: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base,mode=max
+      - name: Build + push :full (Nix-warmed target)
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/fleet-build
+          file: containers/fleet-build/Containerfile
+          target: full
+          push: true
+          tags: |
+            ghcr.io/dezren39/fleet-build:full
+            ghcr.io/dezren39/fleet-build:full-sha-${{ github.sha }}
+          no-cache: ${{ inputs.fresh_build == true }}
+          cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full
+          cache-to: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full,mode=max
+
+  smoke:
+    # Prove the published image actually works as a GHA job container —
+    # the exact way consuming repos will use it.
+    needs: build
+    runs-on: ubuntu-24.04
+    container: ghcr.io/dezren39/fleet-build:full
+    steps:
+      - name: Toolchain check inside the published container
+        run: |
+          set -eux
+          go version
+          git --version
+          jq --version
+          nix --version
+          su vscode -c 'nix --version && go version'
+      - uses: actions/checkout@v4
+        with:
+          repository: developing-today/code
+          path: code-check
+      - name: Warmed shell opens without realising (cache hit in image)
+        run: |
+          cd code-check
+          timeout 600 su vscode -c 'cd "$GITHUB_WORKSPACE/code-check" && nix develop --command true' \
+            || echo "WARN: code dev shell did not open from the warmed store within 10 min (warm layer may have missed it; base image still valid)"

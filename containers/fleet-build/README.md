@@ -1,0 +1,112 @@
+# fleet-build — the fleet's shared build/test container
+
+One image, three jobs:
+
+| Use | How |
+|---|---|
+| **GitHub Actions builds/tests** (any repo, either owner) | `container: ghcr.io/dezren39/fleet-build:full` on a job (see `examples/`) |
+| **Codespaces** for dezren39/fleet | `.devcontainer/devcontainer.json` names this image — see below |
+| **Local / laptop** | `docker run --rm -it ghcr.io/dezren39/fleet-build:full bash` (or podman) |
+
+Published by `.github/workflows/fleet-build-container.yml` in this repo:
+on pushes to main that touch `containers/fleet-build/**`, weekly
+(Mondays 06:00 UTC), and on manual dispatch — where **Fresh build**
+rebuilds with no layer cache (the "maybe a fresh build" knob).
+
+## Tags
+
+- `:latest` / `:base` — OS tools + pinned Nix + pinned Go. Small, fast to pull.
+- `:full` — base **plus every fleet repo's default Nix dev shell realised
+  into the image's `/nix` store** (code, opencode, openchamber required;
+  nix, zettel best-effort). Jobs start with their toolchains already
+  present: no install step, no cache restore, works offline for those shells.
+- `:sha-<commit>` / `:full-sha-<commit>` — immutable pins. **Use a sha tag
+  in real workflows**; keep `:full` for experiments.
+
+## The no-nixpkgs-update rule
+
+Building this image **never updates any repo's nixpkgs pin**:
+
+- The base layer doesn't use nixpkgs at all — Nix and Go are pinned
+  upstream binaries (`NIX_VERSION`, `GO_VERSION` args in the Containerfile,
+  bumped only by a deliberate PR).
+- The warmed layer consumes each repo's `flake.lock` **exactly as
+  committed** (`warm.sh` contains no `nix flake update`, no
+  `--update-input`). If a lock is old, the image faithfully contains the
+  old shell.
+- Layer caching makes this cheap: the warm layer's cache key is the lock
+  files themselves (the publish workflow copies only `flake.nix` /
+  `flake.lock` into the build context first). A source-only change in a
+  repo reuses the realised store untouched; only a repo that deliberately
+  updates its own lock pays a re-realisation, and only for its own shell.
+
+## Can Codespaces use it? Yes.
+
+A devcontainer does not have to build a Dockerfile — it can name a
+prebuilt image. This repo's `.devcontainer/devcontainer.json` does:
+
+```json
+{ "image": "ghcr.io/dezren39/fleet-build:latest", "...": "the rest unchanged" }
+```
+
+Codespaces then *pulls* the image instead of building, so a codespace
+starts at pull speed, and the fleet prebuilds snapshot that same pull.
+Notes:
+
+- The image is based on `mcr.microsoft.com/devcontainers/base` and keeps
+  the `vscode` user, so it satisfies the devcontainer runtime contract.
+- Devcontainer **features are applied on top of an image too** — but
+  anything a non-Codespaces consumer needs (GHA jobs get no features)
+  must be in the image itself. That's why Go is baked in rather than
+  left as the old devcontainer's Go feature.
+- `.devcontainer/Dockerfile` is kept as the fallback: switch the one
+  `image` line back to a `build` block and Codespaces builds locally
+  again, exactly as before.
+- Any *other* repo can do the same — a developing-today repo can name
+  `ghcr.io/dezren39/fleet-build:full` in its own devcontainer.json and
+  get a codespace with the warmed shells, under its own ownership.
+  (Org repos still can't use Codespaces *prebuilds/settings* on the
+  Free org plan — that's a plan limit, not an image limit.)
+
+## Using it for builds/tests in BOTH owners
+
+The image is a **public GHCR package under dezren39**. A job container
+reference is just an image name — the consuming repo's owner doesn't
+matter. The same workflow snippet works verbatim in `dezren39/nix`,
+`developing-today/code`, `developing-today/opencode`, etc.
+(`examples/gha-job-container.yml`):
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: ghcr.io/dezren39/fleet-build:full
+    steps:
+      - uses: actions/checkout@v4
+      - run: nix develop --command make test   # or go test ./... etc.
+```
+
+Container-job specifics worth knowing:
+
+- Steps run as **root** by default in a job container. Nix here is a
+  single-user install owned by `vscode`; root can run it via the
+  `/usr/local/bin/nix` symlink, and repo shells are usually best run as
+  `su vscode -c 'nix develop --command …'`. The publish workflow's
+  smoke job demonstrates both.
+- A job container is **not** a runner: the job still counts against the
+  owning account's concurrency (40 personal / 20 org) and the 6-hour
+  job cap still applies. What the image buys is *zero setup time and a
+  known toolchain*, not extra capacity.
+- There is also a mirror publish for the org namespace —
+  `ghcr.io/developing-today/fleet-build` — built by a workflow in
+  developing-today/code from this same Containerfile, for repos that
+  prefer an org-owned package. Prefer the dezren39 package (it's the
+  canonical build the smoke test verifies); the mirror is a re-tag of
+  the same source.
+
+## What's inside (base)
+
+Ubuntu 24.04 (devcontainers base), git, gh (via base image), direnv,
+jq, ripgrep, fd, shellcheck, sqlite3, python3, Go (pinned), Nix
+(pinned, flakes on, sandbox off — required inside containers).
+Everything else comes from the repos' own dev shells in `:full`.

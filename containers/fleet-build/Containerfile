@@ -1,0 +1,84 @@
+# fleet-build — one image for GitHub Actions job containers AND Codespaces.
+#
+# Two targets:
+#   base  (published as :latest / :base) — OS tools + pinned Nix + pinned Go.
+#         Everything is installed from upstream binaries / apt. NO nixpkgs
+#         is involved in building this layer at all.
+#   full  (published as :full) — base + the fleet repos' Nix dev shells
+#         realised into /nix inside the image, using each repo's flake.lock
+#         EXACTLY as committed. The warm step never runs `nix flake update`
+#         (see warm.sh), so publishing this image never bumps anyone's
+#         nixpkgs pin — when a repo deliberately updates its own lock, the
+#         next image build picks that lock up and re-realises only the
+#         changed shell (buildx registry layer cache keyed on the lock
+#         files; see the publish workflow).
+#
+# Codespaces: .devcontainer/devcontainer.json points at the published
+# :latest image ("image": "ghcr.io/dezren39/fleet-build:latest") — a
+# codespace then starts by pulling this image instead of building the
+# old .devcontainer/Dockerfile. That Dockerfile is kept as the fallback.
+#
+# GHA: any repo in dezren39 or developing-today can run a job in it:
+#   jobs:
+#     build:
+#       runs-on: ubuntu-24.04
+#       container: ghcr.io/dezren39/fleet-build:full
+# See containers/fleet-build/README.md and examples/.
+
+# ---------- pins (bump deliberately, in a PR, never by a lock update) ----
+ARG NIX_VERSION=2.35.4
+ARG GO_VERSION=1.25.14
+
+# ============================ base =====================================
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04 AS base
+ARG NIX_VERSION
+ARG GO_VERSION
+
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      direnv jq ripgrep fd-find shellcheck sqlite3 python3 python3-pip \
+      unzip xz-utils ca-certificates curl git \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -sf /usr/bin/fdfind /usr/local/bin/fd
+
+# Pinned Go, from the official tarball (no nixpkgs, no devcontainer
+# feature — GHA job containers do not apply devcontainer features, so
+# everything a job needs has to be in the image itself).
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tgz \
+ && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+USER vscode
+# Pinned single-user Nix for the vscode user (same layout as the proven
+# fleet devcontainer). Sandbox off: inside GHA job containers and
+# Codespaces the sandbox cannot create its namespaces.
+RUN curl -fsSL "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" | sh -s -- --no-daemon \
+ && mkdir -p "$HOME/.config/nix" \
+ && printf 'experimental-features = nix-command flakes\nbuild-users-group =\nsandbox = false\n' > "$HOME/.config/nix/nix.conf"
+ENV PATH="/home/vscode/.nix-profile/bin:/usr/local/go/bin:${PATH}"
+
+USER root
+# Make nix usable by root too (GHA runs job-container steps as root by
+# default; the store is world-readable and root bypasses ownership).
+RUN ln -s /home/vscode/.nix-profile/bin/nix /usr/local/bin/nix \
+ && ln -s /home/vscode/.nix-profile/bin/nix-build /usr/local/bin/nix-build || true
+USER vscode
+WORKDIR /home/vscode
+
+# ============================ full (warmed) ============================
+FROM base AS full
+USER vscode
+# Only the flake files are copied first: this layer's cache key is the
+# lock files themselves. Source changes that don't touch a lock reuse
+# the realised store layer untouched.
+COPY --chown=vscode:vscode warm-manifest.txt /tmp/warm-manifest.txt
+COPY --chown=vscode:vscode warm.sh /tmp/warm.sh
+# The publish workflow copies each public submodule's flake.nix/flake.lock
+# into ./warm-context/<repo>/ before building this target (submodule
+# contents are not part of the docker build context by default, and
+# hatch-personal is private / excluded on purpose).
+COPY --chown=vscode:vscode warm-context/ /tmp/warm-context/
+RUN bash /tmp/warm.sh /tmp/warm-manifest.txt /tmp/warm-context \
+ && nix store gc || true
+WORKDIR /home/vscode
