@@ -1,0 +1,22 @@
+# Example: run a job's builds/tests inside the fleet-build container.
+# Works verbatim in any repo under dezren39 OR developing-today —
+# the image is a public GHCR package; the consuming repo's owner
+# does not matter. Copy the `container:` line (and the su pattern
+# for nix shells) into a real workflow; this file is documentation,
+# it is not itself a live workflow (it does not live in .github/workflows).
+name: example-using-fleet-build
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    # :full = toolchains + every fleet repo's dev shell pre-realised.
+    # Use a :full-sha-<commit> tag instead of :full for a pinned build.
+    container: ghcr.io/dezren39/fleet-build:full
+    steps:
+      - uses: actions/checkout@v4
+      - name: Direct tools (run as root, the job-container default)
+        run: |
+          go version
+          nix --version
+      - name: Repo dev shell (run as vscode, who owns the Nix store)
+        run: su vscode -c 'cd "$GITHUB_WORKSPACE" && nix develop --command make test'

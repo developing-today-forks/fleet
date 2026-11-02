@@ -1,0 +1,9 @@
+# Repos whose default dev shell is realised into the :full image.
+# Format: <fleet submodule dir> [optional]
+# dezren39/nix is optional: it is primarily a NixOS/home config repo,
+# and a missing/odd dev shell there must not block the fleet image.
+code
+opencode
+openchamber
+nix optional
+zettel optional
