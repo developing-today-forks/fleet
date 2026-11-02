@@ -91,6 +91,11 @@ jobs:
 
 Container-job specifics worth knowing:
 
+- If the workflow uses `actions/checkout` (or other JS actions), set
+  `options: --user root` on the container — the image's default user is
+  `vscode`, under which JS actions cannot write the runner's
+  file-command directory and checkout fails with EACCES (verified in
+  fleet run 41519078473). Pure `run:` steps work either way.
 - Steps run as **root** by default in a job container. Nix here is a
   single-user install owned by `vscode`; root can run it via the
   `/usr/local/bin/nix` symlink, and repo shells are usually best run as
