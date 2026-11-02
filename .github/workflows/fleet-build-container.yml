@@ -82,7 +82,13 @@ jobs:
         with:
           submodules: false
       - name: Init public submodules (never hatch-personal — it is private)
-        run: git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
+        run: |
+          # Workspace files are owned by the runner host's uid; git in
+          # the container (root) calls that dubious ownership and
+          # refuses (run 41520691666). This is our own ephemeral
+          # workspace — mark it safe.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
       - name: Compute nar cache key from the locks as committed
         id: key
         run: |
