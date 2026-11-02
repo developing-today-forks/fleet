@@ -7,13 +7,18 @@ name: fleet-build container
 #     namespace of the consuming repo does not matter;
 #   * the Codespaces image for this repo (.devcontainer points at it).
 #
-# Triggers follow the fleet rule (CI on main, not on PRs) plus a manual
-# dispatch. `fresh_build` = a from-scratch build (no layer cache): use
-# it when a pin changes or a cached layer is suspect. Ordinary rebuilds
-# reuse the registry layer cache, and the warmed :full layer is keyed
-# on the repos' flake.lock files — if no lock changed, the Nix store
-# layer is reused untouched (no nixpkgs update is ever run here; see
-# containers/fleet-build/warm.sh).
+# Pipeline (v2, 2026-11-02): base image -> warm-export job -> :full.
+# The warmed Nix store is realised in a NORMAL job container, never
+# inside `docker build`: Nix realisation under BuildKit died
+# deterministically with a libstore SQLite assertion (runs
+# 41516480304 / 41517835968). export.sh realises each repo's default
+# dev shell from its flake.lock EXACTLY as committed (no
+# `nix flake update` anywhere) and exports the closures as a file://
+# binary cache; the :full image merely imports that cache. The cache
+# is keyed on the lock files' hashes — unchanged locks, no re-realise.
+#
+# Triggers follow the fleet rule (main, not PRs) plus manual dispatch.
+# `fresh_build` ignores the Docker layer cache AND the nar cache.
 
 on:
   push:
@@ -22,13 +27,11 @@ on:
       - "containers/fleet-build/**"
       - ".github/workflows/fleet-build-container.yml"
   schedule:
-    # Weekly fresh-ish rebuild (Mondays 06:00 UTC): picks up base-image
-    # and submodule-pointer changes even when nobody touched the image.
     - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
       fresh_build:
-        description: "Fresh build (ignore all layer cache)"
+        description: "Fresh build (ignore layer cache and nar cache)"
         type: boolean
         default: false
 
@@ -37,24 +40,20 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  build-base:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: false
-      - name: Init public submodules (never hatch-personal — it is private)
-        run: git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build + push :latest (base target)
+      - name: Build + push :latest / :base
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: containers/fleet-build
           file: containers/fleet-build/Containerfile
           target: base
           push: true
@@ -65,24 +64,76 @@ jobs:
           no-cache: ${{ inputs.fresh_build == true }}
           cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base
           cache-to: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base,mode=max
-      - name: Build + push :full (Nix-warmed target)
+
+  warm-export:
+    needs: build-base
+    runs-on: ubuntu-24.04
+    container: ghcr.io/dezren39/fleet-build:base
+    outputs:
+      nar-key: ${{ steps.key.outputs.nar-key }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Init public submodules (never hatch-personal — it is private)
+        run: git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
+      - name: Compute nar cache key from the locks as committed
+        id: key
+        run: |
+          if [ "${{ inputs.fresh_build }}" = "true" ]; then
+            echo "nar-key=fleet-nar-fresh-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "nar-key=fleet-nar-${{ hashFiles('code/flake.lock', 'opencode/flake.lock', 'openchamber/flake.lock', 'nix/flake.lock', 'zettel/flake.lock') }}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Restore nar cache
+        id: nar
+        uses: actions/cache@v4
+        with:
+          path: nar-cache
+          key: ${{ steps.key.outputs.nar-key }}
+      - name: Realise shells + export closures (skipped on cache hit)
+        if: steps.nar.outputs.cache-hit != 'true'
+        run: bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE"
+
+  build-full:
+    needs: warm-export
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore nar cache
+        uses: actions/cache/restore@v4
+        with:
+          path: nar-cache
+          key: ${{ needs.warm-export.outputs.nar-key }}
+      - name: Place nar cache in the build context
+        run: |
+          mkdir -p containers/fleet-build/nar-cache
+          cp -a nar-cache/. containers/fleet-build/nar-cache/
+          ls containers/fleet-build/nar-cache | head
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push :full (imports the nar cache)
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: containers/fleet-build
           file: containers/fleet-build/Containerfile
           target: full
           push: true
           tags: |
             ghcr.io/dezren39/fleet-build:full
             ghcr.io/dezren39/fleet-build:full-sha-${{ github.sha }}
-          no-cache: ${{ inputs.fresh_build == true }}
           cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full
           cache-to: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full,mode=max
 
   smoke:
     # Prove the published image actually works as a GHA job container —
-    # the exact way consuming repos will use it.
-    needs: build
+    # the exact way consuming repos will use it, including a warmed
+    # shell opening with the network off.
+    needs: build-full
     runs-on: ubuntu-24.04
     container: ghcr.io/dezren39/fleet-build:full
     steps:
@@ -101,7 +152,6 @@ jobs:
         with:
           repository: developing-today/code
           path: code-check
-      - name: Warmed shell opens without realising (cache hit in image)
+      - name: Warmed shell opens OFFLINE from the image's store
         run: |
-          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop --accept-flake-config --command true' \
-            || echo "WARN: code dev shell did not open from the warmed store within 10 min (warm layer may have missed it; base image still valid)"
+          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop --offline --accept-flake-config --command true'

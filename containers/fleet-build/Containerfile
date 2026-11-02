@@ -7,7 +7,7 @@
 #   full  (published as :full) — base + the fleet repos' Nix dev shells
 #         realised into /nix inside the image, using each repo's flake.lock
 #         EXACTLY as committed. The warm step never runs `nix flake update`
-#         (see warm.sh), so publishing this image never bumps anyone's
+#         (see export.sh), so publishing this image never bumps anyone's
 #         nixpkgs pin — when a repo deliberately updates its own lock, the
 #         next image build picks that lock up and re-realises only the
 #         changed shell (buildx registry layer cache keyed on the lock
@@ -67,28 +67,17 @@ USER vscode
 WORKDIR /home/vscode
 
 # ============================ full (warmed) ============================
+# The warmed store is NOT realised during `docker build` — Nix store
+# realisation under BuildKit dies deterministically with a libstore
+# SQLite assertion (fleet runs 41516480304 / 41517835968, 2026-11-02).
+# Instead the publish workflow realises the shells in a normal job
+# container (export.sh) and exports their closures as a file:// binary
+# cache (nar-cache/, passed between jobs via actions/cache, keyed on
+# the repos' flake.lock hashes). This target only IMPORTS that cache —
+# sequential path registration, a different and safe code path.
 FROM base AS full
 USER vscode
-# Only the flake files are copied first: this layer's cache key is the
-# lock files themselves. Source changes that don't touch a lock reuse
-# the realised store layer untouched.
-COPY --chown=vscode:vscode containers/fleet-build/warm-manifest.txt /tmp/warm-manifest.txt
-COPY --chown=vscode:vscode containers/fleet-build/warm.sh /tmp/warm.sh
-# Build context is the fleet repo root (see the publish workflow). The
-# FULL submodule sources are copied per repo — a dev shell cannot be
-# realised from flake.nix/flake.lock alone when the flake references
-# local paths, which all of ours do. hatch-personal is NEVER copied:
-# it is private, and the root .dockerignore excludes it from the
-# context entirely, so it cannot leak into this public image.
-COPY --chown=vscode:vscode code /tmp/warm-context/code
-COPY --chown=vscode:vscode opencode /tmp/warm-context/opencode
-COPY --chown=vscode:vscode openchamber /tmp/warm-context/openchamber
-COPY --chown=vscode:vscode nix /tmp/warm-context/nix
-COPY --chown=vscode:vscode zettel /tmp/warm-context/zettel
-# Warm failure must fail the build — never mask it. (v1 had
-# `warm && gc || true`, which swallowed a real warm failure and
-# published an unwarmed :full. Fixed 2026-11-02 after run 41513747440.)
-RUN bash /tmp/warm.sh /tmp/warm-manifest.txt /tmp/warm-context
-RUN nix store gc || true
-RUN rm -rf /tmp/warm-context /tmp/warm.sh /tmp/warm-manifest.txt
+COPY --chown=vscode:vscode nar-cache/ /tmp/nar-cache/
+RUN nix copy --all --from file:///tmp/nar-cache --no-check-sigs \
+ && rm -rf /tmp/nar-cache
 WORKDIR /home/vscode
