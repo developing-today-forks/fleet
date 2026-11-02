@@ -24,22 +24,20 @@ export PATH="/home/vscode/.nix-profile/bin:/usr/local/go/bin:$PATH"
 export NIX_CONFIG="experimental-features = nix-command flakes ca-derivations
 sandbox = false
 eval-cache = false
-build-users-group =
-max-substitution-jobs = 1"
-# ca-derivations: the crash stack (run 41525338113) is
+build-users-group ="
+# ca-derivations is load-bearing: the crash stack (run 41525338113) is
 # LocalStore::queryRealisation_ asserting on a null prepared statement
 # — the realisations table is only created when the ca-derivations
 # experimental feature is on, and something in code's shell closure
-# queries it. Enabling the feature should create the table at store
-# open instead of asserting at first query.
-# Serialise local builds too (see the nix build call): Nix 2.35.4
-# daemonless crashes with a libstore SQLite assertion
-# (SQLiteStmt::Use, std::terminate) once parallel substitution/build
-# registration starts, in every environment tried (BuildKit, job
-# container as root, as vscode — runs 41516480304..41524189872).
-# Fleet CI never sees it: it uses a daemon-mode install. Warming is
-# cache-keyed and not latency-critical, so serial is acceptable here;
-# if this still crashes, the next step is a daemon-mode export job.
+# queries it. With the feature on, realisation proceeds.
+# History: an earlier mitigation also serialised substitution/builds
+# (max-substitution-jobs = 1, --max-jobs 1). Serial WITHOUT
+# ca-derivations still crashed (41525338113); ca-derivations WITH
+# serial ran 80+ min without crashing but was impractically slow —
+# serial downloads of code's huge shell closure — so that run
+# (41526881852) was cancelled and serialisation dropped. If the
+# assertion returns with parallel jobs, ca-derivations was not the
+# (only) fix and serialisation has to come back in a targeted form.
 
 while read -r repo opt; do
   [ -z "${repo:-}" ] && continue
@@ -52,7 +50,7 @@ while read -r repo opt; do
   echo "export: building $repo default dev shell (lock as committed: $(md5sum "$dir/flake.lock" 2>/dev/null | cut -d' ' -f1))"
   ok=""
   for attempt in 1 2; do
-    if out=$(nix build --max-jobs 1 --accept-flake-config --no-link --print-out-paths "$dir#devShells.x86_64-linux.default" 2>&1); then ok=1; break; fi
+    if out=$(nix build --accept-flake-config --no-link --print-out-paths "$dir#devShells.x86_64-linux.default" 2>&1); then ok=1; break; fi
     # Print the HEAD of the failure (the actual error) — v2 printed only
     # the tail, which was an anonymous stack trace (run 41521687044).
     echo "export: $repo attempt $attempt failed:"; echo "$out" | grep -vE "^[0-9]+# " | head -25
