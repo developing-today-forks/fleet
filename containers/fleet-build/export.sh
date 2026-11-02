@@ -21,11 +21,17 @@ mkdir -p "$export_dir"
 # install owned by vscode — use its absolute profile path, and pass
 # the flake settings via NIX_CONFIG (root has no nix.conf of its own).
 export PATH="/home/vscode/.nix-profile/bin:/usr/local/go/bin:$PATH"
-export NIX_CONFIG="experimental-features = nix-command flakes
+export NIX_CONFIG="experimental-features = nix-command flakes ca-derivations
 sandbox = false
 eval-cache = false
 build-users-group =
 max-substitution-jobs = 1"
+# ca-derivations: the crash stack (run 41525338113) is
+# LocalStore::queryRealisation_ asserting on a null prepared statement
+# — the realisations table is only created when the ca-derivations
+# experimental feature is on, and something in code's shell closure
+# queries it. Enabling the feature should create the table at store
+# open instead of asserting at first query.
 # Serialise local builds too (see the nix build call): Nix 2.35.4
 # daemonless crashes with a libstore SQLite assertion
 # (SQLiteStmt::Use, std::terminate) once parallel substitution/build
