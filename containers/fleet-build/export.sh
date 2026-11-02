@@ -11,10 +11,15 @@
 #
 # Locks are used exactly as committed — no `nix flake update` anywhere.
 #
-# Usage: export.sh <manifest> <fleet-workspace-root>
+# Usage: export.sh <manifest> <fleet-workspace-root> [repo]
+# With [repo], only that repo is exported (its required/optional flag
+# still comes from the manifest). The publish workflow runs one job
+# per repo so each closure is cached under its own lock's hash and a
+# slow or failing repo neither blocks nor discards the others.
 set -uo pipefail
 manifest="${1:?manifest path}"
 ctx="${2:?fleet workspace root}"
+only="${3:-}"
 export_dir="$PWD/nar-cache"
 mkdir -p "$export_dir"
 # In a job container the steps run as root while Nix is a single-user
@@ -42,6 +47,7 @@ build-users-group ="
 while read -r repo opt; do
   [ -z "${repo:-}" ] && continue
   case "$repo" in \#*) continue ;; esac
+  if [ -n "$only" ] && [ "$repo" != "$only" ]; then continue; fi
   dir="$ctx/$repo"
   if [ ! -f "$dir/flake.nix" ]; then
     echo "export: $repo has no flake.nix — skipped"

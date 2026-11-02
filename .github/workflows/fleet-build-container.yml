@@ -7,15 +7,20 @@ name: fleet-build container
 #     namespace of the consuming repo does not matter;
 #   * the Codespaces image for this repo (.devcontainer points at it).
 #
-# Pipeline (v2, 2026-11-02): base image -> warm-export job -> :full.
-# The warmed Nix store is realised in a NORMAL job container, never
-# inside `docker build`: Nix realisation under BuildKit died
+# Pipeline (v3, 2026-11-02): base image -> per-repo warm-export jobs
+# -> :full. The warmed Nix store is realised in NORMAL job containers,
+# never inside `docker build`: Nix realisation under BuildKit died
 # deterministically with a libstore SQLite assertion (runs
-# 41516480304 / 41517835968). export.sh realises each repo's default
-# dev shell from its flake.lock EXACTLY as committed (no
-# `nix flake update` anywhere) and exports the closures as a file://
-# binary cache; the :full image merely imports that cache. The cache
-# is keyed on the lock files' hashes — unchanged locks, no re-realise.
+# 41516480304 / 41517835968). export.sh realises a repo's default dev
+# shell from its flake.lock EXACTLY as committed (no
+# `nix flake update` anywhere) and exports the closure as a file://
+# binary cache; the :full image merely imports the merged caches.
+# Each repo exports in its OWN job, cached under its OWN lock's hash:
+# unchanged locks are never re-realised, and one slow or failing repo
+# neither blocks nor discards the others (v2's single monolithic
+# export job ran blind for 48+ min with no per-repo signal, run
+# 41539380529). Optional repos (nix, zettel) may fail without failing
+# the publish; required repos (code, opencode, openchamber) may not.
 #
 # Triggers follow the fleet rule (main, not PRs) plus manual dispatch.
 # `fresh_build` ignores the Docker layer cache AND the nar cache.
@@ -68,6 +73,10 @@ jobs:
   warm-export:
     needs: build-base
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [code, opencode, openchamber, nix, zettel]
     # --user root: the image's default USER is vscode (devcontainers
     # base), under which actions/checkout cannot write the runner's
     # file-command dir (EACCES, run 41519078473). Steps here are
@@ -75,27 +84,28 @@ jobs:
     container:
       image: ghcr.io/dezren39/fleet-build:base
       options: --user root
-    outputs:
-      nar-key: ${{ steps.key.outputs.nar-key }}
+    # Optional repos must not fail the publish. Their export step is
+    # continue-on-error below; this job itself never fails on them
+    # because the only fallible step carries that flag.
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: false
-      - name: Init public submodules (never hatch-personal — it is private)
+      - name: Init this repo's submodule (never hatch-personal — it is private)
         run: |
           # Workspace files are owned by the runner host's uid; git in
           # the container (root) calls that dubious ownership and
           # refuses (run 41520691666). This is our own ephemeral
           # workspace — mark it safe.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
-      - name: Compute nar cache key from the locks as committed
+          git submodule update --init --jobs 4 ${{ matrix.repo }}
+      - name: Compute nar cache key from this repo's lock as committed
         id: key
         run: |
           if [ "${{ inputs.fresh_build }}" = "true" ]; then
-            echo "nar-key=fleet-nar-fresh-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "nar-key=fleet-nar-fresh-${{ matrix.repo }}-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
           else
-            echo "nar-key=fleet-nar-${{ hashFiles('code/flake.lock', 'opencode/flake.lock', 'openchamber/flake.lock', 'nix/flake.lock', 'zettel/flake.lock') }}" >> "$GITHUB_OUTPUT"
+            echo "nar-key=fleet-nar-${{ matrix.repo }}-${{ hashFiles(format('{0}/flake.lock', matrix.repo)) }}" >> "$GITHUB_OUTPUT"
           fi
       - name: Restore nar cache
         id: nar
@@ -103,14 +113,13 @@ jobs:
         with:
           path: nar-cache
           key: ${{ steps.key.outputs.nar-key }}
-      - name: Realise shells + export closures (skipped on cache hit)
+      - name: Realise shell + export closure (skipped on cache hit)
         if: steps.nar.outputs.cache-hit != 'true'
+        continue-on-error: ${{ matrix.repo == 'nix' || matrix.repo == 'zettel' }}
         run: |
           # Run the export AS vscode, who owns the single-user Nix
-          # store. Runs 41516480304..41521687044 all realised as root
-          # (or under BuildKit) and died on the same libstore SQLite
-          # assertion ~50-60s into code's shell; fleet CI, which runs
-          # nix as the store's owner, does this daily without it.
+          # store (the root/BuildKit realisations are the ones that
+          # died on the libstore SQLite assertion; see export.sh).
           mkdir -p nar-cache
           chown vscode:vscode nar-cache
           # libgit2 (Nix's flake fetcher) enforces the same ownership
@@ -118,22 +127,69 @@ jobs:
           # repos (run 41523275400). Mark them safe in vscode's config.
           runuser -u vscode -- env HOME=/home/vscode git config --global --add safe.directory '*'
           runuser -u vscode -- env HOME=/home/vscode GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
-            bash -lc 'cd "$GITHUB_WORKSPACE" && bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE"'
+            bash -lc 'cd "$GITHUB_WORKSPACE" && bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE" "${{ matrix.repo }}"'
+      - name: Drop empty nar cache after a failed optional export
+        if: failure() && (matrix.repo == 'nix' || matrix.repo == 'zettel')
+        run: |
+          # An empty cache entry would poison later runs (cache-hit
+          # with nothing in it). A PARTIAL cache is fine and useful —
+          # only remove the dir when it holds no narinfo at all.
+          if [ -z "$(find nar-cache -name '*.narinfo' -print -quit 2>/dev/null)" ]; then
+            rm -rf nar-cache
+          fi
 
   build-full:
     needs: warm-export
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Restore nar cache
+        with:
+          submodules: false
+      - name: Init public submodules (locks only, for cache keys)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --jobs 4 code opencode openchamber nix zettel
+      - name: Restore per-repo nar caches and merge
+        run: |
+          mkdir -p containers/fleet-build/nar-cache restored
+          echo "merged cache will be assembled under containers/fleet-build/nar-cache"
+      - name: Restore code nar cache
         uses: actions/cache/restore@v4
         with:
-          path: nar-cache
-          key: ${{ needs.warm-export.outputs.nar-key }}
-      - name: Place nar cache in the build context
+          path: restored/code
+          key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-code-{0}', github.run_id) || format('fleet-nar-code-{0}', hashFiles('code/flake.lock')) }}
+      - name: Restore opencode nar cache
+        uses: actions/cache/restore@v4
+        with:
+          path: restored/opencode
+          key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-opencode-{0}', github.run_id) || format('fleet-nar-opencode-{0}', hashFiles('opencode/flake.lock')) }}
+      - name: Restore openchamber nar cache
+        uses: actions/cache/restore@v4
+        with:
+          path: restored/openchamber
+          key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-openchamber-{0}', github.run_id) || format('fleet-nar-openchamber-{0}', hashFiles('openchamber/flake.lock')) }}
+      - name: Restore nix nar cache (optional)
+        uses: actions/cache/restore@v4
+        with:
+          path: restored/nix
+          key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-nix-{0}', github.run_id) || format('fleet-nar-nix-{0}', hashFiles('nix/flake.lock')) }}
+      - name: Restore zettel nar cache (optional)
+        uses: actions/cache/restore@v4
+        with:
+          path: restored/zettel
+          key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-zettel-{0}', github.run_id) || format('fleet-nar-zettel-{0}', hashFiles('zettel/flake.lock')) }}
+      - name: Merge caches into the build context (required repos must be present)
         run: |
-          mkdir -p containers/fleet-build/nar-cache
-          cp -a nar-cache/. containers/fleet-build/nar-cache/
+          set -euo pipefail
+          for r in code opencode openchamber; do
+            if [ ! -d "restored/$r" ] || [ -z "$(ls -A "restored/$r" 2>/dev/null)" ]; then
+              echo "ERROR: required nar cache for $r is missing or empty" >&2
+              exit 1
+            fi
+          done
+          for r in code opencode openchamber nix zettel; do
+            if [ -d "restored/$r" ]; then cp -a "restored/$r/." containers/fleet-build/nar-cache/; fi
+          done
           ls containers/fleet-build/nar-cache | head
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
