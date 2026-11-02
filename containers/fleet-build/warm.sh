@@ -25,6 +25,13 @@ while read -r repo opt; do
     echo "warm: $repo has no flake.nix in context — skipped"
     [ "${opt:-}" = "optional" ] && continue || { echo "warm: $repo is required but missing"; exit 1; }
   fi
+  # The copied submodule tree carries a `.git` FILE (a gitdir pointer to
+  # ../.git/modules/<repo> in the fleet checkout). Inside the image that
+  # pointer dangles, and Nix's flake fetcher dies trying to open it as a
+  # git repo (run 41515524862). Drop it — this is a throwaway copy, and a
+  # plain path flake realises identically. The fleet checkout itself is
+  # never touched.
+  rm -rf "$dir/.git"
   echo "warm: realising $repo default dev shell (lock as committed: $(md5sum "$dir/flake.lock" 2>/dev/null | cut -d' ' -f1))"
   # `nix develop --command true` forces full realisation of the shell's
   # closure into the local store without running anything in it.
