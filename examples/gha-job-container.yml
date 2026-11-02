@@ -19,4 +19,4 @@ jobs:
           go version
           nix --version
       - name: Repo dev shell (run as vscode, who owns the Nix store)
-        run: su vscode -c 'cd "$GITHUB_WORKSPACE" && nix develop --command make test'
+        run: runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE" && nix develop --command make test'

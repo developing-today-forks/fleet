@@ -1,0 +1,8 @@
+# Docker build context for the fleet-build container is the fleet repo
+# root (the :full target warms from the public submodules' sources).
+# hatch-personal is PRIVATE: it is excluded here so its contents can
+# never enter the context — and therefore never the public image —
+# even though the submodule is checked out in some workspaces.
+hatch-personal
+.git
+**/node_modules

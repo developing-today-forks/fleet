@@ -28,7 +28,7 @@ while read -r repo opt; do
   echo "warm: realising $repo default dev shell (lock as committed: $(md5sum "$dir/flake.lock" 2>/dev/null | cut -d' ' -f1))"
   # `nix develop --command true` forces full realisation of the shell's
   # closure into the local store without running anything in it.
-  if nix develop "$dir" --command true; then
+  if nix develop --accept-flake-config "$dir" --command true; then
     echo "warm: $repo OK"
   elif [ "${opt:-}" = "optional" ]; then
     echo "warm: $repo FAILED (optional, continuing)"

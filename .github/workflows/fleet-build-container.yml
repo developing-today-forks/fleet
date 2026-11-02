@@ -45,15 +45,6 @@ jobs:
           submodules: false
       - name: Init public submodules (never hatch-personal — it is private)
         run: git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch
-      - name: Prepare warm context (flake files only, locks as committed)
-        run: |
-          set -euo pipefail
-          for r in code opencode openchamber nix zettel; do
-            mkdir -p "containers/fleet-build/warm-context/$r"
-            cp "$r/flake.nix" "containers/fleet-build/warm-context/$r/" 2>/dev/null || true
-            cp "$r/flake.lock" "containers/fleet-build/warm-context/$r/" 2>/dev/null || true
-          done
-          find containers/fleet-build/warm-context -type f | sort
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -63,7 +54,7 @@ jobs:
       - name: Build + push :latest (base target)
         uses: docker/build-push-action@v6
         with:
-          context: containers/fleet-build
+          context: .
           file: containers/fleet-build/Containerfile
           target: base
           push: true
@@ -77,7 +68,7 @@ jobs:
       - name: Build + push :full (Nix-warmed target)
         uses: docker/build-push-action@v6
         with:
-          context: containers/fleet-build
+          context: .
           file: containers/fleet-build/Containerfile
           target: full
           push: true
@@ -102,13 +93,15 @@ jobs:
           git --version
           jq --version
           nix --version
-          su vscode -c 'nix --version && go version'
+          # `su vscode` asks for a password in this image (run
+          # 41513747440); runuser from root does not, and HOME must be
+          # pointed at the vscode home for its Nix profile to resolve.
+          runuser -u vscode -- env HOME=/home/vscode bash -lc 'nix --version && go version'
       - uses: actions/checkout@v4
         with:
           repository: developing-today/code
           path: code-check
       - name: Warmed shell opens without realising (cache hit in image)
         run: |
-          cd code-check
-          timeout 600 su vscode -c 'cd "$GITHUB_WORKSPACE/code-check" && nix develop --command true' \
+          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop --accept-flake-config --command true' \
             || echo "WARN: code dev shell did not open from the warmed store within 10 min (warm layer may have missed it; base image still valid)"

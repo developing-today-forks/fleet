@@ -72,13 +72,23 @@ USER vscode
 # Only the flake files are copied first: this layer's cache key is the
 # lock files themselves. Source changes that don't touch a lock reuse
 # the realised store layer untouched.
-COPY --chown=vscode:vscode warm-manifest.txt /tmp/warm-manifest.txt
-COPY --chown=vscode:vscode warm.sh /tmp/warm.sh
-# The publish workflow copies each public submodule's flake.nix/flake.lock
-# into ./warm-context/<repo>/ before building this target (submodule
-# contents are not part of the docker build context by default, and
-# hatch-personal is private / excluded on purpose).
-COPY --chown=vscode:vscode warm-context/ /tmp/warm-context/
-RUN bash /tmp/warm.sh /tmp/warm-manifest.txt /tmp/warm-context \
- && nix store gc || true
+COPY --chown=vscode:vscode containers/fleet-build/warm-manifest.txt /tmp/warm-manifest.txt
+COPY --chown=vscode:vscode containers/fleet-build/warm.sh /tmp/warm.sh
+# Build context is the fleet repo root (see the publish workflow). The
+# FULL submodule sources are copied per repo — a dev shell cannot be
+# realised from flake.nix/flake.lock alone when the flake references
+# local paths, which all of ours do. hatch-personal is NEVER copied:
+# it is private, and the root .dockerignore excludes it from the
+# context entirely, so it cannot leak into this public image.
+COPY --chown=vscode:vscode code /tmp/warm-context/code
+COPY --chown=vscode:vscode opencode /tmp/warm-context/opencode
+COPY --chown=vscode:vscode openchamber /tmp/warm-context/openchamber
+COPY --chown=vscode:vscode nix /tmp/warm-context/nix
+COPY --chown=vscode:vscode zettel /tmp/warm-context/zettel
+# Warm failure must fail the build — never mask it. (v1 had
+# `warm && gc || true`, which swallowed a real warm failure and
+# published an unwarmed :full. Fixed 2026-11-02 after run 41513747440.)
+RUN bash /tmp/warm.sh /tmp/warm-manifest.txt /tmp/warm-context
+RUN nix store gc || true
+RUN rm -rf /tmp/warm-context /tmp/warm.sh /tmp/warm-manifest.txt
 WORKDIR /home/vscode

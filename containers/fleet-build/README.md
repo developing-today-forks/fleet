@@ -34,11 +34,13 @@ Building this image **never updates any repo's nixpkgs pin**:
   committed** (`warm.sh` contains no `nix flake update`, no
   `--update-input`). If a lock is old, the image faithfully contains the
   old shell.
-- Layer caching makes this cheap: the warm layer's cache key is the lock
-  files themselves (the publish workflow copies only `flake.nix` /
-  `flake.lock` into the build context first). A source-only change in a
-  repo reuses the realised store untouched; only a repo that deliberately
-  updates its own lock pays a re-realisation, and only for its own shell.
+- Layer caching keeps this tolerable: each repo is copied in its own
+  layer, in fleet-submodule-pointer order, so a repo whose pointer did
+  not move reuses its realised store layer untouched. Only a repo whose
+  submodule pointer moved pays a re-realisation, and only for its own
+  shell. (v1 tried warming from `flake.nix`/`flake.lock` alone — that
+  cannot work: our flakes reference local source paths, so the whole
+  repo source is the warm context. Corrected 2026-11-02.)
 
 ## Can Codespaces use it? Yes.
 
@@ -91,7 +93,9 @@ Container-job specifics worth knowing:
 - Steps run as **root** by default in a job container. Nix here is a
   single-user install owned by `vscode`; root can run it via the
   `/usr/local/bin/nix` symlink, and repo shells are usually best run as
-  `su vscode -c 'nix develop --command …'`. The publish workflow's
+  `runuser -u vscode -- env HOME=/home/vscode bash -lc 'nix develop --command …'`
+  (plain `su vscode` prompts for a password in this image — verified in
+  the first publish run). The publish workflow's
   smoke job demonstrates both.
 - A job container is **not** a runner: the job still counts against the
   owning account's concurrency (40 personal / 20 org) and the 6-hour
