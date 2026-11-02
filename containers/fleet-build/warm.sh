@@ -35,7 +35,16 @@ while read -r repo opt; do
   echo "warm: realising $repo default dev shell (lock as committed: $(md5sum "$dir/flake.lock" 2>/dev/null | cut -d' ' -f1))"
   # `nix develop --command true` forces full realisation of the shell's
   # closure into the local store without running anything in it.
-  if nix develop --accept-flake-config "$dir" --command true; then
+  # One retry: run 41516480304 died ~50s into the code shell on a Nix
+  # internal SQLite assertion (SQLiteStmt::Use) — a store-DB hiccup
+  # class, not an evaluation error; the store keeps whatever was
+  # realised, so a second attempt resumes rather than restarts.
+  ok=""
+  for attempt in 1 2; do
+    if nix develop --accept-flake-config "$dir" --command true; then ok=1; break; fi
+    echo "warm: $repo attempt $attempt failed, retrying once" >&2
+  done
+  if [ -n "$ok" ]; then
     echo "warm: $repo OK"
   elif [ "${opt:-}" = "optional" ]; then
     echo "warm: $repo FAILED (optional, continuing)"
