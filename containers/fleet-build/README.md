@@ -30,17 +30,18 @@ Building this image **never updates any repo's nixpkgs pin**:
 - The base layer doesn't use nixpkgs at all — Nix and Go are pinned
   upstream binaries (`NIX_VERSION`, `GO_VERSION` args in the Containerfile,
   bumped only by a deliberate PR).
-- The warmed layer consumes each repo's `flake.lock` **exactly as
-  committed** (`warm.sh` contains no `nix flake update`, no
+- The warmed store consumes each repo's `flake.lock` **exactly as
+  committed** (`export.sh` contains no `nix flake update`, no
   `--update-input`). If a lock is old, the image faithfully contains the
   old shell.
-- Layer caching keeps this tolerable: each repo is copied in its own
-  layer, in fleet-submodule-pointer order, so a repo whose pointer did
-  not move reuses its realised store layer untouched. Only a repo whose
-  submodule pointer moved pays a re-realisation, and only for its own
-  shell. (v1 tried warming from `flake.nix`/`flake.lock` alone — that
-  cannot work: our flakes reference local source paths, so the whole
-  repo source is the warm context. Corrected 2026-11-02.)
+- How warming works (v2): a normal GHA *job container* (the base image)
+  realises each shell and exports its closure as a binary cache, keyed
+  in actions/cache by the lock files' hashes — unchanged locks are
+  never re-realised. The `:full` image then only *imports* that cache.
+  Realising inside `docker build` was tried first and abandoned: Nix
+  store realisation under BuildKit dies deterministically with a
+  libstore SQLite assertion (fleet runs 41516480304 / 41517835968).
+  Importing is a different, sequential code path and is safe there.
 
 ## Can Codespaces use it? Yes.
 
