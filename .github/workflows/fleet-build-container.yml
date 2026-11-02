@@ -68,7 +68,13 @@ jobs:
   warm-export:
     needs: build-base
     runs-on: ubuntu-24.04
-    container: ghcr.io/dezren39/fleet-build:base
+    # --user root: the image's default USER is vscode (devcontainers
+    # base), under which actions/checkout cannot write the runner's
+    # file-command dir (EACCES, run 41519078473). Steps here are
+    # written for root anyway (see export.sh).
+    container:
+      image: ghcr.io/dezren39/fleet-build:base
+      options: --user root
     outputs:
       nar-key: ${{ steps.key.outputs.nar-key }}
     steps:
@@ -135,7 +141,9 @@ jobs:
     # shell opening with the network off.
     needs: build-full
     runs-on: ubuntu-24.04
-    container: ghcr.io/dezren39/fleet-build:full
+    container:
+      image: ghcr.io/dezren39/fleet-build:full
+      options: --user root
     steps:
       - name: Toolchain check inside the published container
         run: |
