@@ -29,7 +29,9 @@ export PATH="/home/vscode/.nix-profile/bin:/usr/local/go/bin:$PATH"
 export NIX_CONFIG="experimental-features = nix-command flakes ca-derivations
 sandbox = false
 eval-cache = false
-build-users-group ="
+build-users-group =
+extra-substituters = https://nix-cache.developing-today-llc-domains-0.workers.dev
+extra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8="
 # ca-derivations is load-bearing: the crash stack (run 41525338113) is
 # LocalStore::queryRealisation_ asserting on a null prepared statement
 # — the realisations table is only created when the ca-derivations
@@ -44,29 +46,57 @@ build-users-group ="
 # assertion returns with parallel jobs, ca-derivations was not the
 # (only) fix and serialisation has to come back in a targeted form.
 
-while read -r repo opt; do
+while read -r repo col2 col3; do
   [ -z "${repo:-}" ] && continue
   case "$repo" in \#*) continue ;; esac
   if [ -n "$only" ] && [ "$repo" != "$only" ]; then continue; fi
+  # Manifest columns: <repo> [shell] [optional] — the shell column names
+  # the devShells attribute to warm (default: "default"); a bare
+  # "optional" in the shell column means shell=default + optional.
+  shell="default"; opt=""
+  for tok in "${col2:-}" "${col3:-}"; do
+    [ -z "$tok" ] && continue
+    if [ "$tok" = "optional" ]; then opt="optional"; else shell="$tok"; fi
+  done
   dir="$ctx/$repo"
   if [ ! -f "$dir/flake.nix" ]; then
     echo "export: $repo has no flake.nix — skipped"
     [ "${opt:-}" = "optional" ] && continue || { echo "export: $repo required but missing"; exit 1; }
   fi
-  echo "export: building $repo default dev shell (lock as committed: $(md5sum "$dir/flake.lock" 2>/dev/null | cut -d' ' -f1))"
+  echo "export: building $repo dev shell '$shell' (lock as committed: $(md5sum "$dir/flake.lock" 2>/dev/null | cut -d' ' -f1))"
   ok=""
   for attempt in 1 2; do
-    if out=$(nix build --accept-flake-config --no-link --print-out-paths "$dir#devShells.x86_64-linux.default" 2>&1); then ok=1; break; fi
-    # Print the HEAD of the failure (the actual error) — v2 printed only
-    # the tail, which was an anonymous stack trace (run 41521687044).
-    echo "export: $repo attempt $attempt failed:"; echo "$out" | grep -vE "^[0-9]+# " | head -25
+    # stdout ONLY into $out: folding stderr in with 2>&1 pollutes the
+    # captured store path with substitution progress lines, and the
+    # copy step then receives a multi-line blob instead of a path
+    # (issue #16; run 41550950349: opencode + openchamber realised fine
+    # and failed at copy with a stack-overflow error). stderr goes to
+    # a log whose HEAD is printed on failure — v2 printed only the
+    # tail, which was an anonymous stack trace (run 41521687044).
+    errlog="$(mktemp)"
+    if out=$(nix build --accept-flake-config --no-link --print-out-paths "$dir#devShells.x86_64-linux.$shell" 2>"$errlog"); then ok=1; break; fi
+    echo "export: $repo attempt $attempt failed:"; grep -vE "^[0-9]+# " "$errlog" | head -25
   done
+  rm -f "${errlog:-}"
   if [ -z "$ok" ]; then
     [ "${opt:-}" = "optional" ] && { echo "export: $repo FAILED (optional, continuing)"; continue; }
     echo "export: $repo FAILED (required)"; exit 1
   fi
+  out="$(echo "$out" | tail -n 1)"
   echo "export: copying closure of $out to nar-cache"
   nix copy --to "file://$export_dir" "$out" || { echo "export: $repo copy FAILED"; exit 1; }
+  # Also push the closure to the fleet's hosted binary cache
+  # (developing-today/nix-cache on Cloudflare R2 + Workers), signed
+  # with the cache's key, so laptops / Codespaces / other CI pull these
+  # paths without realising them. Non-fatal: the nar-cache above is
+  # what the image build consumes; a cache outage must not fail it.
+  if [ -n "${NIX_CACHE_UPLOAD_URL:-}" ] && [ -n "${NIX_CACHE_SIGNING_KEY_FILE:-}" ]; then
+    echo "export: pushing $repo closure to the fleet nix-cache"
+    nix path-info --recursive "$out" | nix store sign --key-file "$NIX_CACHE_SIGNING_KEY_FILE" --stdin \
+      && nix copy --to "$NIX_CACHE_UPLOAD_URL" "$out" \
+      && echo "export: $repo pushed to nix-cache" \
+      || echo "export: WARNING $repo nix-cache push failed (non-fatal)"
+  fi
   echo "export: $repo OK"
 done < "$manifest"
 echo "export: done — $(du -sh "$export_dir" | cut -f1) in nar-cache"

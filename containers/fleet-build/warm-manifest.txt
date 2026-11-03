@@ -1,9 +1,11 @@
-# Repos whose default dev shell is realised into the :full image.
-# Format: <fleet submodule dir> [optional]
+# Repos whose dev shell is realised into the :full image.
+# Format: <fleet submodule dir> [shell] [optional]
+# The shell column names the devShells attribute to warm; repos with a
+# lean `fleet` shell (no Android SDK / desktop closure) warm that one.
 # dezren39/nix is optional: it is primarily a NixOS/home config repo,
 # and a missing/odd dev shell there must not block the fleet image.
-code
+code fleet
 opencode
-openchamber
-nix optional
-zettel optional
+openchamber fleet
+nix default optional
+zettel default optional
