@@ -194,7 +194,7 @@ jobs:
           for r in code opencode openchamber nix zettel; do
             if [ -d "restored/nar-$r" ]; then cp -a "restored/nar-$r/." containers/fleet-build/nar-cache/; fi
           done
-          ls containers/fleet-build/nar-cache | head
+          echo "merged narinfo count: $(find containers/fleet-build/nar-cache -name '*.narinfo' | wc -l)"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
