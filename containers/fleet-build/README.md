@@ -51,6 +51,12 @@ Building this image **never updates any repo's nixpkgs pin**:
   nix.conf and each fleet repo's flake `nixConfig` carry that cache as
   an extra substituter. Push failures are non-fatal to the image
   build.
+- The same closures are also pushed to the fleet's Cachix cache
+  (developing-today.cachix.org) — the dual-push split: the R2
+  nix-cache is the uncapped system of record, Cachix is the fast
+  hosted layer for this bounded shell set only (bulkier artifacts
+  go to R2 only). The image's nix.conf trusts the Cachix cache as
+  an extra substituter too.
 
 ## Can Codespaces use it? Yes.
 
