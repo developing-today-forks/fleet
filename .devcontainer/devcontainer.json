@@ -1,7 +1,5 @@
 {
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
+  "image": "ghcr.io/dezren39/fleet-build:latest",
   "customizations": {
     "codespaces": {
       "repositories": {
