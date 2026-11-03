@@ -27,8 +27,9 @@ this repo is the prebuild play.
 | `dezren39-zettel/` | dezren39/zettel |
 | `org-readme/` | developing-today/.github (the org's profile Readme page) |
 | `zulip-archive/` | developing-today/zulip-archive |
+| `hardware-doc/` | developing-today/hardware-doc |
 
-Nine are public, so clones inside a codespace need no extra auth.
+Ten are public, so clones inside a codespace need no extra auth.
 `hatch-personal` and `cairn` are private: the umbrella records only
 their SHAs, and their init in postCreate is best-effort — they clone
 only when the codespace was granted access to them. The devcontainer
