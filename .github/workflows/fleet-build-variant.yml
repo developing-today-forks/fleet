@@ -1,0 +1,329 @@
+name: fleet-build variant (gated pin-fresh)
+
+# The gated, pin-fresh variant of the fleet-build publish (Drew,
+# 2026-11-03). Where the plain pipeline (fleet-build-container.yml)
+# publishes whatever is committed, this one keeps the fleet's
+# submodule pins fresh on a ~30-minute cadence and publishes ONLY
+# on a full pass:
+#
+#   1. check — compare each warmed submodule's committed pin with
+#      its upstream HEAD. All aligned -> the run ends here (the
+#      short circuit; most runs are this). Otherwise the lagging
+#      targets are computed once and shared with every later job.
+#   2. warm-export — the same five legs as the plain pipeline, but
+#      realised against the TARGET pins, with NO optional legs and
+#      STRICT cache pushes (EXPORT_STRICT_PUSH=1 in export.sh): a
+#      leg passes only if it realises AND both hosted-cache pushes
+#      (R2 nix-cache + Cachix) succeed. The silent-warning failure
+#      mode of issues #28/#30/#32 is a hard failure here. Variant
+#      nar-cache entries live under their own key prefix, so a
+#      cache hit can only ever come from an earlier strict run.
+#   3. build — build :base and :full (against the target pins'
+#      closures), smoke the :full image locally, and only then push
+#      — to ghcr.io/developing-today/fleet-build ONLY, authenticated
+#      with the classic PAT in GHCR_ORG_PAT (GHCR registry auth does
+#      not accept fine-grained PATs or another repo's GITHUB_TOKEN).
+#   4. commit-pins — only after a successful publish: advance the
+#      submodule pointers on main to the targets. A pointer-only
+#      commit does not match the plain pipeline's path filter, so
+#      this never re-triggers it.
+#   5. report (always) — per-leg issue bookkeeping in THIS repo:
+#      one standing issue per leg (label fleet-build-leg); a
+#      failure comments the run link on it (creating it if none is
+#      open), a later pass comments the recovery. No duplicates.
+#
+# The legs' tool container is the plain pipeline's published
+# ghcr.io/dezren39/fleet-build:base — the tool image is not the
+# product; the product of this workflow is the org image + pins.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even if all pins already align"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-build-variant
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      aligned: ${{ steps.cmp.outputs.aligned }}
+      targets: ${{ steps.cmp.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Compare submodule pins against upstream HEADs
+        id: cmp
+        run: |
+          set -euo pipefail
+          targets="{}"
+          aligned=true
+          for spec in "code developing-today/code" "opencode developing-today/opencode" "openchamber developing-today/openchamber" "nix dezren39/nix" "zettel developing-today/zettel"; do
+            set -- $spec; leg=$1; upstream=$2
+            git submodule update --init "$leg"
+            current=$(git -C "$leg" rev-parse HEAD)
+            latest=$(git ls-remote "https://github.com/$upstream.git" HEAD | cut -f1)
+            targets=$(printf '%s' "$targets" | jq -c --arg l "$leg" --arg s "$latest" '. + {($l): $s}')
+            if [ "$current" != "$latest" ]; then
+              aligned=false
+              echo "$leg: pin $current -> upstream $latest"
+            else
+              echo "$leg: aligned at $current"
+            fi
+          done
+          echo "aligned=$aligned" >> "$GITHUB_OUTPUT"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  warm-export:
+    needs: check
+    if: needs.check.outputs.aligned != 'true' || inputs.force == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [code, opencode, openchamber, nix, zettel]
+    container:
+      image: ghcr.io/dezren39/fleet-build:base
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Init this repo's submodule and advance it to the target pin
+        env:
+          TARGETS: ${{ needs.check.outputs.targets }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --jobs 4 ${{ matrix.repo }}
+          target=$(printf '%s' "$TARGETS" | jq -r '.["${{ matrix.repo }}"]')
+          git -C "${{ matrix.repo }}" fetch origin "$target" || git -C "${{ matrix.repo }}" fetch origin
+          git -C "${{ matrix.repo }}" checkout --detach "$target"
+          echo "${{ matrix.repo }} advanced to $(git -C "${{ matrix.repo }}" rev-parse HEAD)"
+      - name: Compute nar cache key from the TARGET lock + warmed shell
+        id: key
+        run: |
+          shell=$(awk -v r="${{ matrix.repo }}" '$1 == r { for (i=2; i<=NF; i++) if ($i != "optional") { print $i; exit } }' containers/fleet-build/warm-manifest.txt)
+          [ -z "$shell" ] && shell=default
+          echo "nar-key=fleet-nar-variant-${{ matrix.repo }}-$shell-${{ hashFiles(format('{0}/flake.lock', matrix.repo)) }}" >> "$GITHUB_OUTPUT"
+      - name: Restore nar cache
+        id: nar
+        uses: actions/cache@v4
+        with:
+          path: nar-cache
+          key: ${{ steps.key.outputs.nar-key }}
+      - name: Materialise nix-cache signing key for the export step
+        if: steps.nar.outputs.cache-hit != 'true'
+        env:
+          NIX_CACHE_SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+        run: |
+          if [ -n "$NIX_CACHE_SIGNING_KEY" ]; then
+            printf '%s' "$NIX_CACHE_SIGNING_KEY" > /home/vscode/.nix-cache-signing-key
+            chown vscode:vscode /home/vscode/.nix-cache-signing-key
+            chmod 600 /home/vscode/.nix-cache-signing-key
+          fi
+      - name: Realise shell + export closure (strict pushes; skipped on cache hit)
+        if: steps.nar.outputs.cache-hit != 'true'
+        env:
+          NIX_CACHE_UPLOAD_URL: ${{ secrets.NIX_CACHE_UPLOAD_URL }}
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          mkdir -p nar-cache
+          chown vscode:vscode nar-cache
+          runuser -u vscode -- env HOME=/home/vscode git config --global --add safe.directory '*'
+          runuser -u vscode -- env HOME=/home/vscode GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            NIX_CACHE_UPLOAD_URL="$NIX_CACHE_UPLOAD_URL" \
+            CACHIX_AUTH_TOKEN="$CACHIX_AUTH_TOKEN" \
+            EXPORT_STRICT_PUSH=1 \
+            NIX_CACHE_SIGNING_KEY_FILE=/home/vscode/.nix-cache-signing-key \
+            bash -lc 'cd "$GITHUB_WORKSPACE" && bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE" "${{ matrix.repo }}"'
+      - name: Upload nar cache for build
+        uses: actions/upload-artifact@v4
+        with:
+          name: nar-${{ matrix.repo }}
+          path: nar-cache
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build:
+    needs: [check, warm-export]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Download per-repo nar caches
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nar-*
+          path: restored
+      - name: Merge caches into the build context (ALL legs must be present)
+        run: |
+          set -euo pipefail
+          mkdir -p containers/fleet-build/nar-cache
+          for r in code opencode openchamber nix zettel; do
+            if [ ! -d "restored/nar-$r" ] || [ -z "$(find "restored/nar-$r" -name '*.narinfo' -print -quit 2>/dev/null)" ]; then
+              echo "ERROR: nar cache for $r is missing or empty — the gate requires every leg" >&2
+              exit 1
+            fi
+            cp -a "restored/nar-$r/." containers/fleet-build/nar-cache/
+          done
+          echo "merged narinfo count: $(find containers/fleet-build/nar-cache -name '*.narinfo' | wc -l)"
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in for layer-cache access (fleet token)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build :base (load locally, do not push yet)
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/fleet-build
+          file: containers/fleet-build/Containerfile
+          target: base
+          load: true
+          tags: |
+            ghcr.io/developing-today/fleet-build:latest
+            ghcr.io/developing-today/fleet-build:base
+            ghcr.io/developing-today/fleet-build:sha-${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base
+          cache-to: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base,mode=max
+      - name: Build :full (load locally, do not push yet)
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/fleet-build
+          file: containers/fleet-build/Containerfile
+          target: full
+          load: true
+          tags: |
+            ghcr.io/developing-today/fleet-build:full
+            ghcr.io/developing-today/fleet-build:full-sha-${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full
+          cache-to: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full,mode=max
+      - name: Check out code at its target pin for the smoke test
+        env:
+          TARGETS: ${{ needs.check.outputs.targets }}
+        run: |
+          target=$(printf '%s' "$TARGETS" | jq -r '.code')
+          git clone --quiet https://github.com/developing-today/code.git code-target
+          git -C code-target checkout --quiet --detach "$target"
+      - name: Smoke the :full image locally (toolchain + warmed shell OFFLINE)
+        run: |
+          set -eux
+          docker run --rm ghcr.io/developing-today/fleet-build:full sh -c 'go version && git --version && jq --version && nix --version'
+          docker run --rm -v "$GITHUB_WORKSPACE/code-target:/src" ghcr.io/developing-today/fleet-build:full \
+            runuser -u vscode -- env HOME=/home/vscode bash -lc 'git config --global --add safe.directory "*" && cd /src && timeout 600 nix develop .#fleet --offline --accept-flake-config --command true'
+      - name: Log in to the ORG namespace (classic PAT)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: dezren39
+          password: ${{ secrets.GHCR_ORG_PAT }}
+      - name: Push :base to developing-today (gate passed)
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/fleet-build
+          file: containers/fleet-build/Containerfile
+          target: base
+          push: true
+          tags: |
+            ghcr.io/developing-today/fleet-build:latest
+            ghcr.io/developing-today/fleet-build:base
+            ghcr.io/developing-today/fleet-build:sha-${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-base
+      - name: Push :full to developing-today (gate passed)
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/fleet-build
+          file: containers/fleet-build/Containerfile
+          target: full
+          push: true
+          tags: |
+            ghcr.io/developing-today/fleet-build:full
+            ghcr.io/developing-today/fleet-build:full-sha-${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/dezren39/fleet-build:buildcache-full
+
+  commit-pins:
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Advance the submodule pointers to the targets and push
+        env:
+          TARGETS: ${{ needs.check.outputs.targets }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for leg in code opencode openchamber nix zettel; do
+            target=$(printf '%s' "$TARGETS" | jq -r ".[\"$leg\"]")
+            git submodule update --init "$leg"
+            git -C "$leg" fetch origin "$target" || git -C "$leg" fetch origin
+            git -C "$leg" checkout --detach "$target"
+          done
+          git add code opencode openchamber nix zettel
+          if git diff --cached --quiet; then
+            echo "pins already at targets; nothing to commit"
+            exit 0
+          fi
+          git commit -m "fleet-build: advance submodule pins to latest (gated variant run ${{ github.run_id }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+  report:
+    needs: [check, warm-export]
+    if: always() && (needs.check.outputs.aligned != 'true' || inputs.force == true)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: File or update the standing per-leg issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh label create fleet-build-leg --color BFD4F2 --description "fleet-build variant: standing per-leg failure issue" --force >/dev/null 2>&1 || true
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("warm-export")) | [.name, (.conclusion // "unknown")] | @tsv' > legs.tsv
+          while IFS=$'\t' read -r name conclusion; do
+            leg=$(printf '%s' "$name" | sed -E 's/.*\(([^)]+)\).*/\1/')
+            [ -z "$leg" ] && continue
+            title="fleet-build leg failing: $leg"
+            existing=$(gh issue list --label fleet-build-leg --state open --search "$leg in:title" --json number --jq '.[0].number // empty')
+            if [ "$conclusion" != "success" ]; then
+              if [ -z "$existing" ]; then
+                gh issue create --label fleet-build-leg --title "$title" \
+                  --body "The gated fleet-build variant's **$leg** leg failed. This is the standing issue for this leg: later failures comment here instead of opening new issues, and the recovery is noted here too.\n\nFirst failing run: $RUN_URL"
+                existing=$(gh issue list --label fleet-build-leg --state open --search "$leg in:title" --json number --jq '.[0].number // empty')
+              fi
+              [ -n "$existing" ] && gh issue comment "$existing" --body "Leg failed in $RUN_URL (conclusion: $conclusion)."
+            else
+              [ -n "$existing" ] && gh issue comment "$existing" --body "Leg green again in $RUN_URL."
+            fi
+          done < legs.tsv

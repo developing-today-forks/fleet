@@ -85,6 +85,18 @@ while read -r repo col2 col3; do
   out="$(echo "$out" | tail -n 1)"
   echo "export: copying closure of $out to nar-cache"
   nix copy --to "file://$export_dir" "$out" || { echo "export: $repo copy FAILED"; exit 1; }
+  # Strict mode (EXPORT_STRICT_PUSH=1, set by the gated variant
+  # workflow): a hosted-cache push that fails — or is skipped
+  # because its credentials are absent — fails the whole leg. The
+  # default stays non-fatal: the nar-cache is what the image build
+  # consumes, and a cache outage must not fail the plain publish.
+  push_failed() {
+    echo "export: WARNING $1 push failed (non-fatal)"
+    if [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
+      echo "export: ERROR $1 push failed and EXPORT_STRICT_PUSH=1 — failing" >&2
+      exit 1
+    fi
+  }
   # Also push the closure to the fleet's hosted binary cache
   # (developing-today/nix-cache on Cloudflare R2 + Workers), signed
   # with the cache's key, so laptops / Codespaces / other CI pull these
@@ -95,7 +107,10 @@ while read -r repo col2 col3; do
     nix path-info --recursive "$out" | nix store sign --key-file "$NIX_CACHE_SIGNING_KEY_FILE" --stdin \
       && nix copy --to "$NIX_CACHE_UPLOAD_URL" "$out" \
       && echo "export: $repo pushed to nix-cache" \
-      || echo "export: WARNING $repo nix-cache push failed (non-fatal)"
+      || push_failed "$repo nix-cache"
+  elif [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
+    echo "export: ERROR $repo nix-cache push skipped (credentials absent) and EXPORT_STRICT_PUSH=1 — failing" >&2
+    exit 1
   fi
   # Also push the closure to the fleet's Cachix cache
   # (developing-today.cachix.org) — the dual-push split (Drew,
@@ -111,7 +126,10 @@ while read -r repo col2 col3; do
     echo "export: pushing $repo closure to Cachix (developing-today)"
     nix path-info --recursive "$out" | xargs -r nix run "github:NixOS/nixpkgs/$(nix eval --raw "$ctx#fleetNixpkgsRev")#cachix" -- push developing-today \
       && echo "export: $repo pushed to Cachix" \
-      || echo "export: WARNING $repo Cachix push failed (non-fatal)"
+      || push_failed "$repo Cachix"
+  elif [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
+    echo "export: ERROR $repo Cachix push skipped (credentials absent) and EXPORT_STRICT_PUSH=1 — failing" >&2
+    exit 1
   fi
   echo "export: $repo OK"
 done < "$manifest"
