@@ -167,48 +167,72 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git submodule update --init --jobs 4 code opencode openchamber nix zettel
-      - name: Restore per-repo nar caches and merge
-        run: |
-          mkdir -p containers/fleet-build/nar-cache restored
-          echo "merged cache will be assembled under containers/fleet-build/nar-cache"
+      # actions/cache versions entries by key + PATH: the exports save
+      # path 'nar-cache', so build-full must restore to that same path
+      # or every restore misses (issue #20, run 41556877450). Each repo
+      # is restored into nar-cache and merged into the build context
+      # before the next restore overwrites it.
+      - name: Prepare merged nar cache dir
+        run: mkdir -p containers/fleet-build/nar-cache
       - name: Restore code nar cache
         uses: actions/cache/restore@v4
         with:
-          path: restored/code
+          path: nar-cache
           key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-code-{0}', github.run_id) || format('fleet-nar-code-{0}', hashFiles('code/flake.lock')) }}
+      - name: Merge code cache into the build context
+        run: |
+          set -euo pipefail
+          if [ -z "$(find nar-cache -name '*.narinfo' -print -quit 2>/dev/null)" ]; then
+            echo "ERROR: required nar cache for code is missing or empty" >&2
+            exit 1
+          fi
+          if [ -d nar-cache ]; then cp -a nar-cache/. containers/fleet-build/nar-cache/; rm -rf nar-cache; fi
       - name: Restore opencode nar cache
         uses: actions/cache/restore@v4
         with:
-          path: restored/opencode
+          path: nar-cache
           key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-opencode-{0}', github.run_id) || format('fleet-nar-opencode-{0}', hashFiles('opencode/flake.lock')) }}
+      - name: Merge opencode cache into the build context
+        run: |
+          set -euo pipefail
+          if [ -z "$(find nar-cache -name '*.narinfo' -print -quit 2>/dev/null)" ]; then
+            echo "ERROR: required nar cache for opencode is missing or empty" >&2
+            exit 1
+          fi
+          if [ -d nar-cache ]; then cp -a nar-cache/. containers/fleet-build/nar-cache/; rm -rf nar-cache; fi
       - name: Restore openchamber nar cache
         uses: actions/cache/restore@v4
         with:
-          path: restored/openchamber
+          path: nar-cache
           key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-openchamber-{0}', github.run_id) || format('fleet-nar-openchamber-{0}', hashFiles('openchamber/flake.lock')) }}
+      - name: Merge openchamber cache into the build context
+        run: |
+          set -euo pipefail
+          if [ -z "$(find nar-cache -name '*.narinfo' -print -quit 2>/dev/null)" ]; then
+            echo "ERROR: required nar cache for openchamber is missing or empty" >&2
+            exit 1
+          fi
+          if [ -d nar-cache ]; then cp -a nar-cache/. containers/fleet-build/nar-cache/; rm -rf nar-cache; fi
       - name: Restore nix nar cache (optional)
         uses: actions/cache/restore@v4
         with:
-          path: restored/nix
+          path: nar-cache
           key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-nix-{0}', github.run_id) || format('fleet-nar-nix-{0}', hashFiles('nix/flake.lock')) }}
+      - name: Merge nix cache into the build context
+        run: |
+          set -euo pipefail
+          if [ -d nar-cache ]; then cp -a nar-cache/. containers/fleet-build/nar-cache/; rm -rf nar-cache; fi
       - name: Restore zettel nar cache (optional)
         uses: actions/cache/restore@v4
         with:
-          path: restored/zettel
+          path: nar-cache
           key: ${{ inputs.fresh_build == true && format('fleet-nar-fresh-zettel-{0}', github.run_id) || format('fleet-nar-zettel-{0}', hashFiles('zettel/flake.lock')) }}
-      - name: Merge caches into the build context (required repos must be present)
+      - name: Merge zettel cache into the build context
         run: |
           set -euo pipefail
-          for r in code opencode openchamber; do
-            if [ ! -d "restored/$r" ] || [ -z "$(ls -A "restored/$r" 2>/dev/null)" ]; then
-              echo "ERROR: required nar cache for $r is missing or empty" >&2
-              exit 1
-            fi
-          done
-          for r in code opencode openchamber nix zettel; do
-            if [ -d "restored/$r" ]; then cp -a "restored/$r/." containers/fleet-build/nar-cache/; fi
-          done
-          ls containers/fleet-build/nar-cache | head
+          if [ -d nar-cache ]; then cp -a nar-cache/. containers/fleet-build/nar-cache/; rm -rf nar-cache; fi
+      - name: Show merged cache
+        run: ls containers/fleet-build/nar-cache | head
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
