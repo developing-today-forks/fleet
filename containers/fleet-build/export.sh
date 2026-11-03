@@ -30,7 +30,7 @@ export NIX_CONFIG="experimental-features = nix-command flakes ca-derivations
 sandbox = false
 eval-cache = false
 build-users-group =
-extra-substituters = https://nix-cache.developing-today-llc-domains-0.workers.dev https://developing-today.cachix.org
+extra-substituters = https://nix-cache.developing-today.workers.dev https://developing-today.cachix.org
 extra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8= developing-today.cachix.org-1:dfIGqIJODUw9V/O9yUrYP2d3tjJtk3SZTDxOBWn9vN4="
 # ca-derivations is load-bearing: the crash stack (run 41525338113) is
 # LocalStore::queryRealisation_ asserting on a null prepared statement
