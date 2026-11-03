@@ -1,0 +1,107 @@
+name: fleet-run (generic dispatch runner)
+
+# A generic, dispatch-only build/test runner for the fleet (Drew,
+# 2026-11-03). The existing pipelines each do exactly one job
+# (publish the images, advance the pins, build one repo's packages);
+# nothing let an agent or a human run an arbitrary build or test
+# inside the fleet's own environment. This workflow is that escape
+# hatch:
+#
+#   gh workflow run fleet-run.yml --repo dezren39/fleet \
+#     -f repo=developing-today/code -f command='nix build .#mcpx'
+#
+# Guardrails, such as they are, are structural: the workflow only
+# runs on workflow_dispatch (dispatching requires write access to
+# this repo), the target repo is a fixed five-repo choice, the job
+# timeout is capped at 120 minutes, and the command runs verbatim
+# with its full log on the run page — nothing is hidden or cached
+# away. There is deliberately no concurrency group: every run gets
+# a fresh runner and container, runs share nothing mutable (the
+# hosted nix caches are content-addressed and append-only), so
+# parallel runs are safe and a group would only serialise them.
+#
+# The job runs in the published org image
+# ghcr.io/developing-today/fleet-build:full as root: the pinned
+# toolchain, Nix, and the baked cache configuration are already
+# there. Commands that must run as the image's nix owner can drop
+# privileges the way the variant legs do:
+#   runuser -u vscode -- env HOME=/home/vscode bash -lc '...'
+#
+# Checkout of the target repo uses the classic PAT in
+# GHCR_ORG_PAT (repo scope; it can read all five fleet repos —
+# this repo's GITHUB_TOKEN could only read this one).
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Target repo to check out and run in"
+        type: choice
+        required: true
+        options:
+          - developing-today/code
+          - developing-today/opencode
+          - developing-today/openchamber
+          - dezren39/nix
+          - dezren39/fleet
+      ref:
+        description: "Branch, tag, or SHA in the target repo (blank = its default branch)"
+        type: string
+        required: false
+        default: ""
+      command:
+        description: "Shell command to run in the checked-out tree (bash -lc)"
+        type: string
+        required: true
+      timeout_minutes:
+        description: "Job timeout in minutes (5-120, fails fast outside)"
+        type: number
+        required: false
+        default: 60
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    # The input is clamped into range so an out-of-range value can
+    # never set an absurd timeout; the validate step then fails the
+    # run fast with the reason.
+    timeout-minutes: ${{ inputs.timeout_minutes > 120 && 120 || inputs.timeout_minutes < 5 && 5 || inputs.timeout_minutes }}
+    container:
+      image: ghcr.io/developing-today/fleet-build:full
+      options: --user root
+    steps:
+      - name: Validate inputs
+        env:
+          TARGET_REPO: ${{ inputs.repo }}
+          TARGET_REF: ${{ inputs.ref }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        run: |
+          set -euo pipefail
+          echo "repo:            $TARGET_REPO"
+          echo "ref:             ${TARGET_REF:-(default branch)}"
+          echo "timeout_minutes: $TIMEOUT_MINUTES"
+          if [ "$TIMEOUT_MINUTES" -lt 5 ] || [ "$TIMEOUT_MINUTES" -gt 120 ]; then
+            echo "::error::timeout_minutes must be between 5 and 120 (got $TIMEOUT_MINUTES)"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.GHCR_ORG_PAT }}
+          path: target
+      - name: Run command
+        env:
+          FLEET_RUN_COMMAND: ${{ inputs.command }}
+        run: |
+          git config --global --add safe.directory '*'
+          cd "$GITHUB_WORKSPACE/target"
+          echo "HEAD: $(git rev-parse HEAD)"
+          bash -lc "$FLEET_RUN_COMMAND"
