@@ -64,5 +64,5 @@
   "name": "fleet",
   "postCreateCommand": "bash -lc 'go version && nix --version && echo fleet-ready'",
   "remoteUser": "vscode",
-  "updateContentCommand": "bash -lc 'git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch dezren39-zettel org-readme zulip-archive ; git submodule update --init hatch-personal || echo hatch-personal-skipped-private ; git submodule update --init cairn || echo cairn-skipped-private'"
+  "updateContentCommand": "bash -lc 'git submodule update --init --jobs 4 code opencode openchamber nix zettel hatch dezren39-zettel org-readme zulip-archive hardware-doc ; git submodule update --init hatch-personal || echo hatch-personal-skipped-private ; git submodule update --init cairn || echo cairn-skipped-private'"
 }

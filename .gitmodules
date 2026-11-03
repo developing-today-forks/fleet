@@ -31,3 +31,6 @@
 [submodule "zulip-archive"]
 	path = zulip-archive
 	url = https://github.com/developing-today/zulip-archive.git
+[submodule "hardware-doc"]
+	path = hardware-doc
+	url = https://github.com/developing-today/hardware-doc.git
