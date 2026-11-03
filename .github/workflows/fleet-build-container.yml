@@ -241,6 +241,11 @@ jobs:
           path: code-check
       - name: Warmed shell opens OFFLINE from the image's store
         run: |
+          # The checkout above is root-owned; Nix's libgit2 fetcher
+          # refuses it as vscode (dubious ownership). The export jobs
+          # hit the same wall (run 41523275400) — mark paths safe in
+          # vscode's git config first.
+          runuser -u vscode -- env HOME=/home/vscode git config --global --add safe.directory '*'
           # code warms its lean `fleet` shell (see warm-manifest.txt),
           # not the default shell — open the one that was warmed.
           timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop .#fleet --offline --accept-flake-config --command true'
