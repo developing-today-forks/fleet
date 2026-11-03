@@ -23,13 +23,18 @@ this repo is the prebuild play.
 | `zettel/` | developing-today/zettel |
 | `hatch/` | dezren39/hatch |
 | `hatch-personal/` | dezren39/hatch-personal (private) |
+| `cairn/` | dezren39/cairn (private) |
+| `dezren39-zettel/` | dezren39/zettel |
+| `org-readme/` | developing-today/.github (the org's profile Readme page) |
+| `zulip-archive/` | developing-today/zulip-archive |
 
-Six are public, so clones inside a codespace need no extra auth.
-`hatch-personal` is private: the umbrella records only its SHA, and its
-init in postCreate is best-effort — it clones only when the codespace
-was granted access to it. The devcontainer requests write permission
-for all seven repos at codespace creation (approve the prompt) so
-pushes from inside work.
+Nine are public, so clones inside a codespace need no extra auth.
+`hatch-personal` and `cairn` are private: the umbrella records only
+their SHAs, and their init in postCreate is best-effort — they clone
+only when the codespace was granted access to them. The devcontainer
+requests write permission for the original seven repos at codespace
+creation (approve the prompt) so pushes from inside work; extending
+those grants to the new public members is a follow-up decision.
 
 ## Working in it
 
