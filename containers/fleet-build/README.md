@@ -34,14 +34,23 @@ Building this image **never updates any repo's nixpkgs pin**:
   committed** (`export.sh` contains no `nix flake update`, no
   `--update-input`). If a lock is old, the image faithfully contains the
   old shell.
-- How warming works (v2): a normal GHA *job container* (the base image)
-  realises each shell and exports its closure as a binary cache, keyed
-  in actions/cache by the lock files' hashes — unchanged locks are
-  never re-realised. The `:full` image then only *imports* that cache.
-  Realising inside `docker build` was tried first and abandoned: Nix
-  store realisation under BuildKit dies deterministically with a
-  libstore SQLite assertion (fleet runs 41516480304 / 41517835968).
-  Importing is a different, sequential code path and is safe there.
+- How warming works (v3): one GHA *job container* per repo (the base
+  image) realises the shell named in `warm-manifest.txt` (the lean
+  `fleet` shell where a repo has one) and exports its closure as a
+  binary cache, keyed in actions/cache by that repo's lock hash —
+  unchanged locks are never re-realised. The `:full` image then only
+  *imports* the merged caches. Realising inside `docker build` was
+  tried first and abandoned: Nix store realisation under BuildKit
+  dies deterministically with a libstore SQLite assertion (fleet runs
+  41516480304 / 41517835968). Importing is a different, sequential
+  code path and is safe there.
+- The same export jobs also sign each closure and push it to the
+  fleet's hosted binary cache (developing-today/nix-cache — Nix on
+  Cloudflare R2 + Workers), so laptops, Codespaces and other CI can
+  substitute the fleet shells without realising them. The image's
+  nix.conf and each fleet repo's flake `nixConfig` carry that cache as
+  an extra substituter. Push failures are non-fatal to the image
+  build.
 
 ## Can Codespaces use it? Yes.
 

@@ -113,9 +113,25 @@ jobs:
         with:
           path: nar-cache
           key: ${{ steps.key.outputs.nar-key }}
+      - name: Materialise nix-cache signing key for the export step
+        if: steps.nar.outputs.cache-hit != 'true'
+        env:
+          NIX_CACHE_SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+        run: |
+          # export.sh signs closures with this key before pushing them
+          # to the fleet binary cache. Owned by vscode (the export runs
+          # as vscode) and mode 600; lives only on this ephemeral
+          # runner.
+          if [ -n "$NIX_CACHE_SIGNING_KEY" ]; then
+            printf '%s' "$NIX_CACHE_SIGNING_KEY" > /home/vscode/.nix-cache-signing-key
+            chown vscode:vscode /home/vscode/.nix-cache-signing-key
+            chmod 600 /home/vscode/.nix-cache-signing-key
+          fi
       - name: Realise shell + export closure (skipped on cache hit)
         if: steps.nar.outputs.cache-hit != 'true'
         continue-on-error: ${{ matrix.repo == 'nix' || matrix.repo == 'zettel' }}
+        env:
+          NIX_CACHE_UPLOAD_URL: ${{ secrets.NIX_CACHE_UPLOAD_URL }}
         run: |
           # Run the export AS vscode, who owns the single-user Nix
           # store (the root/BuildKit realisations are the ones that
@@ -127,6 +143,8 @@ jobs:
           # repos (run 41523275400). Mark them safe in vscode's config.
           runuser -u vscode -- env HOME=/home/vscode git config --global --add safe.directory '*'
           runuser -u vscode -- env HOME=/home/vscode GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            NIX_CACHE_UPLOAD_URL="$NIX_CACHE_UPLOAD_URL" \
+            NIX_CACHE_SIGNING_KEY_FILE=/home/vscode/.nix-cache-signing-key \
             bash -lc 'cd "$GITHUB_WORKSPACE" && bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE" "${{ matrix.repo }}"'
       - name: Drop empty nar cache after a failed optional export
         if: failure() && (matrix.repo == 'nix' || matrix.repo == 'zettel')
@@ -237,4 +255,6 @@ jobs:
           path: code-check
       - name: Warmed shell opens OFFLINE from the image's store
         run: |
-          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop --offline --accept-flake-config --command true'
+          # code warms its lean `fleet` shell (see warm-manifest.txt),
+          # not the default shell — open the one that was warmed.
+          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop .#fleet --offline --accept-flake-config --command true'

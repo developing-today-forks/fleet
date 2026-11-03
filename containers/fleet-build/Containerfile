@@ -55,7 +55,7 @@ USER vscode
 # Codespaces the sandbox cannot create its namespaces.
 RUN curl -fsSL "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" | sh -s -- --no-daemon \
  && mkdir -p "$HOME/.config/nix" \
- && printf 'experimental-features = nix-command flakes\nbuild-users-group =\nsandbox = false\neval-cache = false\n' > "$HOME/.config/nix/nix.conf"
+ && printf 'experimental-features = nix-command flakes\nbuild-users-group =\nsandbox = false\neval-cache = false\nextra-substituters = https://nix-cache.developing-today-llc-domains-0.workers.dev\nextra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8=\n' > "$HOME/.config/nix/nix.conf"
 ENV PATH="/home/vscode/.nix-profile/bin:/usr/local/go/bin:${PATH}"
 
 USER root
