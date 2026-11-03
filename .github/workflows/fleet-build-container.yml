@@ -101,13 +101,19 @@ jobs:
           # workspace — mark it safe.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git submodule update --init --jobs 4 ${{ matrix.repo }}
-      - name: Compute nar cache key from this repo's lock as committed
+      - name: Compute nar cache key from this repo's lock + warmed shell as committed
         id: key
         run: |
+          # The shell token is part of the key (issue #30): the key used
+          # to be lock-only, so switching the manifest from one shell to
+          # another (nix: default -> fleet) silently kept restoring the
+          # OLD shell's closure and skipped the export entirely.
+          shell=$(awk -v r="${{ matrix.repo }}" '$1 == r { for (i=2; i<=NF; i++) if ($i != "optional") { print $i; exit } }' containers/fleet-build/warm-manifest.txt)
+          [ -z "$shell" ] && shell=default
           if [ "${{ inputs.fresh_build }}" = "true" ]; then
             echo "nar-key=fleet-nar-fresh-${{ matrix.repo }}-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
           else
-            echo "nar-key=fleet-nar-${{ matrix.repo }}-${{ hashFiles(format('{0}/flake.lock', matrix.repo)) }}" >> "$GITHUB_OUTPUT"
+            echo "nar-key=fleet-nar-${{ matrix.repo }}-$shell-${{ hashFiles(format('{0}/flake.lock', matrix.repo)) }}" >> "$GITHUB_OUTPUT"
           fi
       - name: Restore nar cache
         id: nar
