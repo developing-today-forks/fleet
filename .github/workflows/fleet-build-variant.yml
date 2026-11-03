@@ -188,12 +188,12 @@ jobs:
           done
           echo "merged narinfo count: $(find containers/fleet-build/nar-cache -name '*.narinfo' | wc -l)"
       - uses: docker/setup-buildx-action@v3
-      - name: Log in for layer-cache access (fleet token)
+      - name: Log in to GHCR (classic PAT — layer cache and org package)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: dezren39
+          password: ${{ secrets.GHCR_ORG_PAT }}
       - name: Build :base (load locally, do not push yet)
         uses: docker/build-push-action@v6
         with:
