@@ -30,8 +30,8 @@ export NIX_CONFIG="experimental-features = nix-command flakes ca-derivations
 sandbox = false
 eval-cache = false
 build-users-group =
-extra-substituters = https://nix-cache.developing-today-llc-domains-0.workers.dev
-extra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8="
+extra-substituters = https://nix-cache.developing-today-llc-domains-0.workers.dev https://developing-today.cachix.org
+extra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8= developing-today.cachix.org-1:dfIGqIJODUw9V/O9yUrYP2d3tjJtk3SZTDxOBWn9vN4="
 # ca-derivations is load-bearing: the crash stack (run 41525338113) is
 # LocalStore::queryRealisation_ asserting on a null prepared statement
 # — the realisations table is only created when the ca-derivations
@@ -96,6 +96,22 @@ while read -r repo col2 col3; do
       && nix copy --to "$NIX_CACHE_UPLOAD_URL" "$out" \
       && echo "export: $repo pushed to nix-cache" \
       || echo "export: WARNING $repo nix-cache push failed (non-fatal)"
+  fi
+  # Also push the closure to the fleet's Cachix cache
+  # (developing-today.cachix.org) — the dual-push split (Drew,
+  # 2026-11-02): the R2 nix-cache above is the uncapped system of
+  # record; Cachix is the fast hosted layer, and only for this
+  # bounded shell set — bulkier artifacts go to R2 only. Cachix
+  # skips anything already on cache.nixos.org, so only
+  # fleet-specific paths land there. Non-fatal, same as the
+  # nix-cache push. The cachix CLI comes from the fleet's own
+  # pinned nixpkgs (fleetNixpkgsRev) so the tool version tracks
+  # the pin instead of drifting.
+  if [ -n "${CACHIX_AUTH_TOKEN:-}" ]; then
+    echo "export: pushing $repo closure to Cachix (developing-today)"
+    nix path-info --recursive "$out" | xargs -r nix run "github:NixOS/nixpkgs/$(nix eval --raw "$ctx#fleetNixpkgsRev")#cachix" -- push developing-today \
+      && echo "export: $repo pushed to Cachix" \
+      || echo "export: WARNING $repo Cachix push failed (non-fatal)"
   fi
   echo "export: $repo OK"
 done < "$manifest"
