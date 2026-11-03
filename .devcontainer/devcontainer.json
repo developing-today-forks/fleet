@@ -1,5 +1,5 @@
 {
-  "image": "ghcr.io/dezren39/fleet-build:latest",
+  "image": "ghcr.io/developing-today/fleet-build:full",
   "customizations": {
     "codespaces": {
       "repositories": {
