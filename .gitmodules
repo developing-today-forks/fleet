@@ -19,3 +19,15 @@
 [submodule "hatch-personal"]
 	path = hatch-personal
 	url = https://github.com/dezren39/hatch-personal.git
+[submodule "cairn"]
+	path = cairn
+	url = https://github.com/dezren39/cairn.git
+[submodule "dezren39-zettel"]
+	path = dezren39-zettel
+	url = https://github.com/dezren39/zettel.git
+[submodule "org-readme"]
+	path = org-readme
+	url = https://github.com/developing-today/.github.git
+[submodule "zulip-archive"]
+	path = zulip-archive
+	url = https://github.com/developing-today/zulip-archive.git
