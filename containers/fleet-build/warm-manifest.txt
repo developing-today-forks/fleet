@@ -7,5 +7,5 @@
 code fleet
 opencode
 openchamber fleet
-nix default optional
+nix fleet optional
 zettel default optional
