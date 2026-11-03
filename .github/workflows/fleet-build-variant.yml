@@ -295,7 +295,7 @@ jobs:
           git push origin HEAD:main
 
   report:
-    needs: [check, warm-export]
+    needs: [check, warm-export, build, commit-pins]
     if: always() && (needs.check.outputs.aligned != 'true' || inputs.force == true)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -314,12 +314,15 @@ jobs:
           set -uo pipefail
           gh label create fleet-build-leg --color BFD4F2 --description "fleet-build variant: standing per-leg failure issue" --force >/dev/null 2>&1 || true
           gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=100" \
-            --jq '.jobs[] | select(.name | startswith("warm-export")) | [.name, (.conclusion // "unknown")] | @tsv' > legs.tsv
+            --jq '.jobs[] | select((.name | startswith("warm-export")) or .name == "build" or .name == "commit-pins") | [.name, (.conclusion // "unknown")] | @tsv' > legs.tsv
           while IFS=$'\t' read -r name conclusion; do
             leg=$(printf '%s' "$name" | sed -E 's/.*\(([^)]+)\).*/\1/')
             [ -z "$leg" ] && continue
+            if [ "$conclusion" = "skipped" ] && { [ "$leg" = "build" ] || [ "$leg" = "commit-pins" ]; }; then
+              continue
+            fi
             title="fleet-build leg failing: $leg"
-            existing=$(gh issue list --label fleet-build-leg --state open --search "$leg in:title" --json number --jq '.[0].number // empty')
+            existing=$(gh issue list --label fleet-build-leg --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
             if [ "$conclusion" != "success" ]; then
               if [ -z "$existing" ]; then
                 url=$(gh issue create --label fleet-build-leg --title "$title" \
