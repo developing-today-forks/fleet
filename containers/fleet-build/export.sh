@@ -90,6 +90,30 @@ while read -r repo col2 col3; do
   # because its credentials are absent — fails the whole leg. The
   # default stays non-fatal: the nar-cache is what the image build
   # consumes, and a cache outage must not fail the plain publish.
+  run_push() {
+    # Strict mode only: ride out short infrastructure wobbles (the
+    # workers.dev DNS failure windows tracked on fleet#32) with
+    # bounded retries before the leg is allowed to fail. Non-strict
+    # runs the command exactly once, as before.
+    if [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
+      local attempt=1
+      until "$@"; do
+        if [ "$attempt" -ge 3 ]; then return 1; fi
+        echo "export: push attempt $attempt failed — retrying in $((attempt * 20))s"
+        sleep $((attempt * 20))
+        attempt=$((attempt + 1))
+      done
+    else
+      "$@"
+    fi
+  }
+  r2_push() {
+    nix path-info --recursive "$out" | nix store sign --key-file "$NIX_CACHE_SIGNING_KEY_FILE" --stdin \
+      && nix copy --to "$NIX_CACHE_UPLOAD_URL" "$out"
+  }
+  cachix_push() {
+    nix path-info --recursive "$out" | xargs -r nix run "github:NixOS/nixpkgs/$(nix eval --raw "$ctx#fleetNixpkgsRev")#cachix" -- push developing-today
+  }
   push_failed() {
     echo "export: WARNING $1 push failed (non-fatal)"
     if [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
@@ -104,8 +128,7 @@ while read -r repo col2 col3; do
   # what the image build consumes; a cache outage must not fail it.
   if [ -n "${NIX_CACHE_UPLOAD_URL:-}" ] && [ -n "${NIX_CACHE_SIGNING_KEY_FILE:-}" ]; then
     echo "export: pushing $repo closure to the fleet nix-cache"
-    nix path-info --recursive "$out" | nix store sign --key-file "$NIX_CACHE_SIGNING_KEY_FILE" --stdin \
-      && nix copy --to "$NIX_CACHE_UPLOAD_URL" "$out" \
+    run_push r2_push \
       && echo "export: $repo pushed to nix-cache" \
       || push_failed "$repo nix-cache"
   elif [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
@@ -124,7 +147,7 @@ while read -r repo col2 col3; do
   # the pin instead of drifting.
   if [ -n "${CACHIX_AUTH_TOKEN:-}" ]; then
     echo "export: pushing $repo closure to Cachix (developing-today)"
-    nix path-info --recursive "$out" | xargs -r nix run "github:NixOS/nixpkgs/$(nix eval --raw "$ctx#fleetNixpkgsRev")#cachix" -- push developing-today \
+    run_push cachix_push \
       && echo "export: $repo pushed to Cachix" \
       || push_failed "$repo Cachix"
   elif [ "${EXPORT_STRICT_PUSH:-0}" = "1" ]; then
