@@ -72,7 +72,7 @@ jobs:
     # The input is clamped into range so an out-of-range value can
     # never set an absurd timeout; the validate step then fails the
     # run fast with the reason.
-    timeout-minutes: ${{ min(max(fromJSON(inputs.timeout_minutes), 5), 120) }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) > 120 && 120 || fromJSON(inputs.timeout_minutes) < 5 && 5 || fromJSON(inputs.timeout_minutes) }}
     container:
       image: ghcr.io/developing-today/fleet-build:full
       options: --user root
