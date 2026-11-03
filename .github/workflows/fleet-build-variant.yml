@@ -230,7 +230,7 @@ jobs:
         run: |
           set -eux
           docker run --rm ghcr.io/developing-today/fleet-build:full sh -c 'go version && git --version && jq --version && nix --version'
-          docker run --rm -v "$GITHUB_WORKSPACE/code-target:/src" ghcr.io/developing-today/fleet-build:full \
+          docker run --rm --user root -v "$GITHUB_WORKSPACE/code-target:/src" ghcr.io/developing-today/fleet-build:full \
             runuser -u vscode -- env HOME=/home/vscode bash -lc 'git config --global --add safe.directory "*" && cd /src && timeout 600 nix develop .#fleet --offline --accept-flake-config --command true'
       - name: Log in to the ORG namespace (classic PAT)
         uses: docker/login-action@v3
