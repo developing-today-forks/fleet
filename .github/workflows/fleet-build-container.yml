@@ -132,6 +132,7 @@ jobs:
         continue-on-error: ${{ matrix.repo == 'nix' || matrix.repo == 'zettel' }}
         env:
           NIX_CACHE_UPLOAD_URL: ${{ secrets.NIX_CACHE_UPLOAD_URL }}
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
         run: |
           # Run the export AS vscode, who owns the single-user Nix
           # store (the root/BuildKit realisations are the ones that
@@ -144,6 +145,7 @@ jobs:
           runuser -u vscode -- env HOME=/home/vscode git config --global --add safe.directory '*'
           runuser -u vscode -- env HOME=/home/vscode GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
             NIX_CACHE_UPLOAD_URL="$NIX_CACHE_UPLOAD_URL" \
+            CACHIX_AUTH_TOKEN="$CACHIX_AUTH_TOKEN" \
             NIX_CACHE_SIGNING_KEY_FILE=/home/vscode/.nix-cache-signing-key \
             bash -lc 'cd "$GITHUB_WORKSPACE" && bash containers/fleet-build/export.sh containers/fleet-build/warm-manifest.txt "$GITHUB_WORKSPACE" "${{ matrix.repo }}"'
       - name: Drop empty nar cache after a failed optional export
