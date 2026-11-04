@@ -31,6 +31,10 @@ on:
 
 permissions:
   contents: write
+  # So a payload that itself touches workflow files is not rejected
+  # when the token in play is the workflow token (the app token used
+  # for the push already carries the app's own workflows permission).
+  workflows: write
 
 concurrency:
   group: sync-upstream
