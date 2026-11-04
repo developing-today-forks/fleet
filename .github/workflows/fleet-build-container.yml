@@ -26,11 +26,6 @@ name: fleet-build container
 # `fresh_build` ignores the Docker layer cache AND the nar cache.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "containers/fleet-build/**"
-      - ".github/workflows/fleet-build-container.yml"
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
