@@ -176,6 +176,14 @@ jobs:
 
   build-full:
     needs: warm-export
+    # fleet#28: an optional leg's HARD job death (runner killed mid-step)
+    # fails its warm-export job, and default needs semantics would skip
+    # this publish even though every required repo exported fine.
+    # !cancelled() runs the publish on any non-cancelled needs outcome;
+    # the merge step below stays the real gate — it hard-fails if a
+    # REQUIRED repo's nar cache is missing or empty. A cancelled run
+    # still blocks the publish.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -230,6 +238,11 @@ jobs:
     # the exact way consuming repos will use it, including a warmed
     # shell opening with the network off.
     needs: build-full
+    # fleet#28 (transitive): smoke whenever build-full actually
+    # succeeded, regardless of what happened to the optional export
+    # legs upstream of it — and never against a stale image after a
+    # build-full failure.
+    if: ${{ !cancelled() && needs.build-full.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
