@@ -14,10 +14,15 @@ name: sync-upstream (daily pull from dezren39/fleet)
 # never auto-resolves a conflict. In dezren39/fleet itself the job is a
 # guarded no-op.
 #
-# On conflict the job also tries to open an issue on dezren39/fleet.
-# The in-workflow token is scoped to the fork repo only, so that filing
-# is best-effort (expected to fail without an app token); the loud job
-# failure is the guaranteed signal.
+# The forks' main branches are locked by a ruleset (no creations,
+# updates, deletions, or force pushes) whose only bypass is the
+# developing.today GitHub App — GitHub's ruleset model cannot name the
+# GitHub Actions integration as a bypass actor on a Free-plan repo
+# ruleset. So the sync does its git work as the APP: it mints an
+# installation token (actions/create-github-app-token; the app key is
+# the FLEET_APP_PRIVATE_KEY secret on the fork repos) and checks out /
+# pushes with it. The same token files the divergence issue upstream,
+# as the app, when a pull conflicts.
 
 on:
   schedule:
@@ -37,17 +42,25 @@ jobs:
     if: github.repository != 'dezren39/fleet'
     runs-on: ubuntu-24.04
     steps:
-      - name: Check out this fork's main
+      - name: Mint the developing.today app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: 5454422
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+
+      - name: Check out this fork's main (as the app)
         uses: actions/checkout@v4
         with:
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
       - name: Pull dezren39/fleet main
         id: pull
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "developing-today[bot]"
+          git config user.email "5454422+developing-today[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/dezren39/fleet.git
           git fetch upstream main
           local_head=$(git rev-parse HEAD)
@@ -74,12 +87,11 @@ jobs:
           git push origin HEAD:main
           echo "synced: $local_head -> $(git rev-parse HEAD)"
 
-      - name: File an issue upstream on conflict (best effort)
+      - name: File an issue upstream on conflict (as the app)
         if: failure() && steps.pull.outputs.result == 'conflict'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh issue create --repo dezren39/fleet \
             --title "sync-upstream: ${{ github.repository }} main has diverged from upstream" \
-            --body "The daily sync-upstream run in ${{ github.repository }} hit a merge conflict pulling dezren39/fleet main, aborted the merge, and pushed nothing. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Commits belong upstream in dezren39/fleet; this fork's main needs a manual convergence." \
-          || echo "::warning::could not file the upstream issue with the workflow token (expected without an app token) — the failed job above is the signal."
+            --body "The daily sync-upstream run in ${{ github.repository }} hit a merge conflict pulling dezren39/fleet main, aborted the merge, and pushed nothing. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Commits belong upstream in dezren39/fleet; this fork's main needs a manual convergence."
