@@ -1,7 +1,9 @@
 # Fork migration plan — developing-today → developing-today-forks (+ pure-clone archive move)
 
-Status: **plan only** (prepared 2026-11-04). No repo moves until Drew rules
-execution timing per repo. Companion docs: `docs/execution-surfaces.md`
+Status: **EXECUTED 2026-11-04** — Drew approved execution of the §3
+real-fork move at 07:02 CST ("yes do it all"); the §8 archive move was
+executed earlier the same day. Executed records: §8 (archive) and §9
+(real forks) at the end of this document. Companion docs: `docs/execution-surfaces.md`
 (surface routing), `docs/placement.md` in the fleet copies (surface
 registry).
 
@@ -283,3 +285,84 @@ string plus parsed flake.lock nodes (owner == developing-today).
   fork now occupies developing-today-vendored/iffy, which is
   the collision blocking the singular org's TruemarkDev/iffy
   (recorded above, awaiting a ruling).
+
+
+## 9. Real-fork move — EXECUTED 2026-11-04
+
+All four §3 repos were transferred from `developing-today` to
+`developing-today-forks` with the user-token transfer API, in plan
+order (nix-openclaw, kaneo, openchamber, opencode), each verified at
+the destination against a same-day snapshot: default-branch head SHA
+identical, branch/issue/PR counts carried, fork parent intact, and
+the old `developing-today/<repo>` path answering with a redirect.
+
+- **nix-openclaw**: head `b4f1c9d0`, 14 branches, 0 issues/PRs. §6
+  re-check at move time: no Actions secrets, no webhooks, no deploy
+  keys — nothing to re-provision. No fleet references existed.
+- **kaneo**: head `1e7cb2d8`, 42 branches, 4 open PRs. No secrets or
+  webhooks. Repoint (app PR, merged): developing-today/code #5454
+  (aggregator program.ts, board fixture, repo-universe.yaml).
+- **openchamber**: head `709ce4b0` (includes its own repoint PR),
+  52 branches, 41 issues, 6 PRs. Repoints (app PRs, merged):
+  openchamber #1580 (its own opencode flake pin — merged *before* the
+  transfer, see deviations), developing-today/code #5463,
+  dezren39/nix #1466, dezren39/fleet #65 (.gitmodules). Pinned rev
+  `794e5f5c` verified fetchable at the new home.
+- **opencode**: head `ce1aec22`, 57 branches, 71 issues, 12 PRs.
+  Repoints (app PRs, merged): developing-today/code #5465,
+  dezren39/nix #1468, dezren39/fleet #66 (.gitmodules). All pinned
+  revs (`4175c630`, `ae5d5920`, `2d912e02`) verified fetchable at the
+  new home; openchamber's lock pin resolves against the moved repo.
+
+§6 findings that update the checklist's assumptions: for transfers
+where the same admin controls both orgs, GitHub **carried the repo
+Actions secrets and webhooks with the repo** — verified by name lists
+and unchanged `updated_at` timestamps at the destination
+(openchamber's 5 secrets, opencode's `REPO_AUTOMATION_TOKEN`, the
+supabase CI webhook on both). Manually-disabled workflow states also
+carried (opencode 15, openchamber 4 — the push-workflow posture is
+unchanged). No manual secret re-provisioning was needed. There were
+no org-level Actions secrets in developing-today and no environment
+secrets in either repo, so the many upstream-inherited workflow
+secret references (Apple/iOS signing, NPM, Discord, …) had nothing
+provisioned to carry — they were unprovisioned before the move and
+remain so.
+
+Two deliberate side effects in the repoint PRs: dispatch's
+`APP_INSTALLED_REPOS` (developing-today/code) no longer lists
+opencode/openchamber — the developing.today app is **not installed
+on developing-today-forks** (verified with the fleet-paperwork
+helper: no installation for that owner), so both repos are app-dark
+until grants item G2 lands; the entries return then.
+`pm-stack/kaneo-projects.json` still records openchamber's pre-move
+installation id; it resolves with the same G2 install.
+
+Open items after the move:
+
+- **G2** (Drew, needs GitHub sudo): install the developing.today app
+  on developing-today-forks with access to the moved repos.
+- The `REPO_AUTOMATION_TOKEN` value carried, but the fine-grained
+  PAT behind it (`developing-today-code-automation`) is scoped to
+  developing-today repos; Drew needs to extend/re-approve it for
+  developing-today-forks before automation that spends it there
+  works.
+- Muse surfaces: hatch-personal cron definitions and repo-health
+  goal workspaces still name `developing-today/opencode` (the plan's
+  §4 item). Redirects bridge git/API access; the app has no write
+  access to hatch-personal, so the definition repoint rides that
+  repo's own maintenance flow.
+- Codespaces repository grants naming the moved repos: re-check per
+  the standing devcontainer-grants question.
+
+Deviations from the plan as written: (1) openchamber's own opencode
+repoint merged before openchamber's transfer rather than inside the
+opencode window (§3 cascade order) — the app cannot write in the
+forks org, so pre-transfer was the only app-authenticated slot; the
+dangling-pin window was minutes and no fleet build consumes
+openchamber's own lock standalone. (2) The §5 pm-dispatch lane pause
+was not invoked; windows were kept to minutes and transfers are
+atomic, with redirects bridging in-flight git/API traffic. (3)
+Branch counts moved between the morning census and the move-day
+snapshots (openchamber 104 → 52, opencode 96 → 57) through the
+repos' own branch-cleanup workflows — each transfer was verified
+against a fresh same-hour snapshot, not the census.
