@@ -190,7 +190,7 @@ jobs:
             exit 1
           }
 
-          allowlist='["developing-today/code", "developing-today/opencode", "developing-today/openchamber", "dezren39/nix", "dezren39/fleet", "developing-today/zettel", "developing-today/.github", "developing-today/zulip-archive", "developing-today/hardware-doc", "dezren39/zettel"]'
+          allowlist='["developing-today/code", "developing-today/opencode", "developing-today/openchamber", "dezren39/nix", "dezren39/fleet", "developing-today/zettel", "developing-today/.github", "developing-today/zulip-archive", "developing-today/hardware-doc", "dezren39/zettel", "dezren39/hatch"]'
 
           if [ -n "$(tr -d '[:space:]' <<<"$JOBS_INPUT")" ]; then
             raw="$JOBS_INPUT"

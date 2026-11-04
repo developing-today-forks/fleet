@@ -15,7 +15,7 @@ name: fleet umbrella verification
 #            variant pipeline gates on): the defining toolchain
 #            (go, git, jq, nix) answers inside the published image.
 #
-# The umbrella's private members (dezren39/cairn, dezren39/hatch,
+# The umbrella's private members (dezren39/cairn,
 # dezren39/hatch-personal) cannot be fetched from GitHub Actions:
 # no credential available to this repo can read them — the same
 # posture as the umbrella's own best-effort private init. The plan
@@ -61,7 +61,7 @@ jobs:
           # Members GitHub Actions cannot fetch (private, and no
           # credential in this repo can read them). Their pins are
           # verified as recorded; see the header comment.
-          recorded_only='["dezren39/cairn", "dezren39/hatch", "dezren39/hatch-personal"]'
+          recorded_only='["dezren39/cairn", "dezren39/hatch-personal"]'
 
           # path -> slug from .gitmodules, path -> sha from the tree.
           subs=$(git config -f .gitmodules --get-regexp 'submodule\..*\.url' | while read -r key url; do
