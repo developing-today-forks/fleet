@@ -255,9 +255,30 @@ jobs:
           # 41513747440); runuser from root does not, and HOME must be
           # pointed at the vscode home for its Nix profile to resolve.
           runuser -u vscode -- env HOME=/home/vscode bash -lc 'nix --version && go version'
+      # fleet#70: smoke the code rev the warm-export legs actually
+      # realised — this repo's committed `code` submodule pin — not
+      # code's floating main. A floating checkout can carry a
+      # flake.nix whose inputs have moved past its committed lock
+      # (the fork reorganization did exactly this), and then
+      # `nix develop --offline` tries to refresh the lock mid-smoke:
+      # a write the offline test should never need, against a closure
+      # that was never warmed. The pin's lock is the nar-cache key
+      # basis, so the pinned rev is the one whose shell is guaranteed
+      # to be in the image's store.
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Resolve the committed code submodule pin
+        id: code-pin
+        run: |
+          pin=$(git ls-tree HEAD code | awk '{print $3}')
+          if [ -z "$pin" ]; then echo "ERROR: no code submodule pin at HEAD" >&2; exit 1; fi
+          echo "code submodule pin: $pin"
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: developing-today/code
+          ref: ${{ steps.code-pin.outputs.pin }}
           path: code-check
       - name: Warmed shell opens OFFLINE from the image's store
         run: |
@@ -266,6 +287,15 @@ jobs:
           # hit the same wall (run 41523275400) — mark paths safe in
           # vscode's git config first.
           runuser -u vscode -- env HOME=/home/vscode git config --global --add safe.directory '*'
+          # The smoke reads the checkout but must never need to write
+          # it: run the develop against a vscode-owned copy, so a lock
+          # refresh (should one ever be attempted) lands in the copy
+          # instead of dying on the root-owned tree (fleet#70). The
+          # copy is runner-local disk only — the offline guarantee is
+          # unchanged: the shell still has to come from the image's
+          # store.
+          cp -a "$GITHUB_WORKSPACE/code-check" "$GITHUB_WORKSPACE/code-smoke"
+          chown -R vscode:vscode "$GITHUB_WORKSPACE/code-smoke"
           # code warms its lean `fleet` shell (see warm-manifest.txt),
           # not the default shell — open the one that was warmed.
-          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-check" && nix develop .#fleet --offline --accept-flake-config --command true'
+          timeout 600 runuser -u vscode -- env HOME=/home/vscode bash -lc 'cd "$GITHUB_WORKSPACE/code-smoke" && nix develop .#fleet --offline --accept-flake-config --command true'
