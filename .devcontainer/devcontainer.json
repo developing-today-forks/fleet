@@ -21,13 +21,13 @@
             "pull_requests": "write"
           }
         },
-        "developing-today/openchamber": {
+        "developing-today-forks/openchamber": {
           "permissions": {
             "contents": "write",
             "pull_requests": "write"
           }
         },
-        "developing-today/opencode": {
+        "developing-today-forks/opencode": {
           "permissions": {
             "contents": "write",
             "pull_requests": "write"
