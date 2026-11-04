@@ -285,6 +285,7 @@ string plus parsed flake.lock nodes (owner == developing-today).
   fork now occupies developing-today-vendored/iffy, which is
   the collision blocking the singular org's TruemarkDev/iffy
   (recorded above, awaiting a ruling).
+- RESOLVED 2026-11-04 (iffy collision): Drew ruled to rename the singular org's TruemarkDev/iffy fork to `iffy-truemark` and move it. Executed the same day: `developing-today-fork/iffy` was renamed to `developing-today-fork/iffy-truemark`, then transferred to `developing-today-vendored/iffy-truemark` (repo id 1162280331; parent `TruemarkDev/iffy`, default branch `main` verified intact). The pre-existing `developing-today-vendored/iffy` (repo id 1162280248, the wzulfikar/iffy fork) was not touched and was verified unchanged.
 
 
 ## 9. Real-fork move — EXECUTED 2026-11-04
