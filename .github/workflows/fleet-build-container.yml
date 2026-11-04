@@ -271,6 +271,10 @@ jobs:
       - name: Resolve the committed code submodule pin
         id: code-pin
         run: |
+          # The checkout is owned by the runner host's uid; git as
+          # root calls that dubious ownership and refuses (the same
+          # wall warm-export documents, run 41520691666).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           pin=$(git ls-tree HEAD code | awk '{print $3}')
           if [ -z "$pin" ]; then echo "ERROR: no code submodule pin at HEAD" >&2; exit 1; fi
           echo "code submodule pin: $pin"
