@@ -233,3 +233,20 @@ string plus parsed flake.lock nodes (owner == developing-today).
   PR #5426) and verified at the new owner with its default branch
   intact; the old developing-today paths redirect to the new
   locations.
+- EXECUTED 2026-11-04 (developing-today-fork, the singular
+  embedded-themed forks org): census of all 7 repos; 5 classified
+  PURE and transferred to developing-today-vendored — syn-rsx,
+  nixos-fhs-compat, call-flake, circuitpython, esp-hosted-mcu.
+  Each was reference-gated first (zero references anywhere in the
+  code/nix/fleet trees) and verified at the new owner with its
+  default branch intact; the old developing-today-fork paths
+  redirect to the new locations. Two repos were NOT transferred:
+  helper (REAL — a 407-commit lineage divergence from its
+  recreated parent, sqwu/helper, plus 7 fork-only branches
+  including a Jules session branch and Aug-2025
+  dependabot-automation branches, and dependabot activity as
+  recent as 2026-02-20) and iffy (PURE by evidence — behind
+  TruemarkDev/iffy by 3, ahead 0 — but blocked by a name
+  collision: developing-today-vendored already holds a different
+  iffy, the wzulfikar/iffy fork moved by the
+  developing-today-forks sweep; awaiting a ruling).
