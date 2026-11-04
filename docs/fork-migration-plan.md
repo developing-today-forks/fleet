@@ -2,7 +2,7 @@
 
 Status: **EXECUTED 2026-11-04** — Drew approved execution of the §3
 real-fork move at 07:02 CST ("yes do it all"); the §8 archive move was
-executed earlier the same day. Executed records: §8 (archive), §9 (real forks) and §10 (reconciliation sweep) at the end of this document. Companion docs: `docs/execution-surfaces.md`
+executed earlier the same day. Executed records: §8 (archive), §9 (real forks), §10 (reconciliation sweep) and §11 (held repo cleared) at the end of this document. Companion docs: `docs/execution-surfaces.md`
 (surface routing), `docs/placement.md` in the fleet copies (surface
 registry).
 
@@ -423,3 +423,38 @@ real was at risk.
   this pass, so no store ports — the forks-org mirrors under
   `~/backups/github/developing-today-forks/` already cover the
   remaining repos (36 stores, incl. opencode/openchamber/kaneo).
+
+## 11. Held repo cleared — EXECUTED 2026-11-04 (final pass)
+
+- Drew approved the move 2026-11-04 10:35 CST ("Move it: repoint
+  code's input to vendored + transfer").
+- Transfer: `developing-today-forks/nixos-unattended-installer` →
+  `developing-today-vendored/nixos-unattended-installer` via the
+  user-token transfer API. Destination head verified identical to
+  source: `25936f740d57d43a05adbb0e667deabd641d9ebc` (main); the
+  old forks path redirects to the vendored repo.
+- Consumer repoint: developing-today/code PR #5581 (app-authored,
+  merged `908b22f095f78343f83f906a283675fff7c8e70d`) —
+  flake.nix `unattended-installer.url` owner forks → vendored, and
+  the flake.lock node's `locked.owner` / `original.owner`
+  likewise. The locked rev (`25936f74…`) and narHash
+  (`sha256-GP8YzfLFOFcSSRqGkzG7HGu/hT749saBgRUMSClkqwU=`) are
+  unchanged — same content, new owner. Other references swept:
+  code `lib/default.nix` consumes the input by name (no path);
+  `doc/fleet/repo-universe.yaml` carries no entry for the repo;
+  code `doc/archive.md` keeps two historical links to the old
+  path (they resolve via the redirect; archive text left
+  as-is); dezren39/nix has no reference.
+- Backup store ported the established way:
+  `~/backups/github/developing-today-forks/nixos-unattended-installer.git`
+  → `~/backups/github/developing-today-vendored/nixos-unattended-installer.git`,
+  origin repointed, plan.json entry + state.json key re-keyed
+  (fetch history preserved; snapshots
+  `plan.json.bak-20261104-installer` /
+  `state.json.bak-20261104-installer`). Delta verified with the
+  system's own fetcher: ok 1, fail 0, missing 0. MANIFEST
+  regenerated — 818 mirrored, 0 missing.
+- Final counts: developing-today-forks 37 repos,
+  developing-today-vendored 71. The §10 hold is cleared; the
+  fork reorganization is COMPLETE — every repo sits in its
+  classified home.
