@@ -149,3 +149,36 @@ Posture:
 | Long-running services (pm-stack, opencode, OpenChamber) | Laptop | Supervision and state live here |
 | Exploratory / interactive sessions | Codespace (or the laptop's opencode) | A driver sits in it; disposable |
 | Anything needing tailnet/LAN or SOPS-rendered secrets | Laptop | Only the laptop holds those keys and routes |
+
+## The forks are mirrors: daily sync + actions-only lockdown
+
+`dezren39/fleet` (this repo) is the only fleet repo of the three that
+takes commits. `developing-today/fleet` and
+`developing-today-forks/fleet` are mirrors — **actions only**:
+
+- **Daily pull.** `.github/workflows/sync-upstream.yml` is defined
+  here, upstream, so it is part of the tree the forks sync (a
+  fork-local file would be erased by its own sync). It runs daily
+  (04:23 UTC) and on dispatch, and in a fork pulls this repo's `main`
+  in: fast-forward when the fork is a strict prefix, a clean merge
+  otherwise. A content conflict aborts the merge, fails the run
+  loudly, and files an issue here **as the developing.today app** —
+  it never force-pushes and never auto-resolves a conflict. In this
+  repo the job is a guarded no-op.
+- **The sync runs as the app.** GitHub's ruleset model cannot name
+  the GitHub Actions integration as a bypass actor on a repository
+  ruleset (it is not part of the owner org), and organization
+  rulesets are Team-plan gated. So the sync mints a developing.today
+  app installation token (`actions/create-github-app-token`; key in
+  the `FLEET_APP_PRIVATE_KEY` secret on the fork repos) and checks
+  out / pushes with it. The app token is also what lets a payload
+  that touches workflow files land: the plain workflow token is
+  refused at push for those, and there is no `workflows` key in the
+  `GITHUB_TOKEN` permissions schema.
+- **Lockdown.** Each fork's `main` carries an active branch ruleset
+  ("main: actions-only (commits happen upstream)") restricting
+  creation, update, and deletion and blocking force pushes for
+  everyone, with a single bypass: the developing.today app. The
+  app lands the forks' own rare direct changes (placement registry,
+  convergences) by PR; everything else arrives via the daily pull.
+  This repo, the upstream, is deliberately **not** locked.
