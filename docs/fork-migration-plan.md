@@ -250,3 +250,36 @@ string plus parsed flake.lock nodes (owner == developing-today).
   collision: developing-today-vendored already holds a different
   iffy, the wzulfikar/iffy fork moved by the
   developing-today-forks sweep; awaiting a ruling).
+- EXECUTED 2026-11-04 (developing-today-forks, the 87-repo fork
+  library): full census of all 88 repos — 54 classified PURE and
+  transferred to developing-today-vendored: DeepSeek-R1,
+  DeepSeek-V3, alejandra, bifrost, comin, controllerbus, dgraph,
+  distributed-topic-tracker, dozerdb-browser, dozerdb-core,
+  dozerdb-plugin, end_of_eden, flexile, git-agecrypt,
+  go-retryablehttp, go-type-to-string, graphipedia, harness2,
+  helper, iffy, invoice, jessfraz.files, jessfraz.vim, kdl-go,
+  kdl-play, lego, necolas.files, neo4j, neosemantics, neovim,
+  nerd-fonts, nix-gl-host, nix-software-center, nixos-installer,
+  nixos-rescue, nixvim-flake, pagefind, piraeus-operator,
+  porkbun-exporter, prime.files, prime.vim, raspberry-pi-nix,
+  slides, ssh-slides, starpc, stork, talhelper,
+  terraform-upload-ami, the-monospace-web, treefmt, viper,
+  wikidata-neo4j-importer, winget-releaser, xen-orchestra-docker.
+  Each was reference-gated first (zero references in the code/nix
+  trees or the umbrella .gitmodules) and verified at the new
+  owner with its default branch intact; the old
+  developing-today-forks paths redirect to the new locations
+  (54/54 verified). NOT transferred: 31 REAL forks carrying
+  dezren39/app commits or PRs (incl. NvChad, NvChad-custom,
+  nixpkgs, home-manager, sops-nix, microvm.nix, server.nix,
+  charm, koanf, log, emanote, octto, octto-fork,
+  scoop-charmbracelet, terraform-plugin-log-tflog-slog-handler —
+  full per-repo evidence in the census record), 2 fleet-internal
+  repos (fleet and zig-overlay — parents are dezren39's own),
+  and nixos-unattended-installer (PURE by divergence but HELD:
+  it is a live flake input — code/flake.nix
+  `unattended-installer.url` plus a code/flake.lock node —
+  repoint before it can move). Note: the moved wzulfikar/iffy
+  fork now occupies developing-today-vendored/iffy, which is
+  the collision blocking the singular org's TruemarkDev/iffy
+  (recorded above, awaiting a ruling).
