@@ -6,7 +6,7 @@
 	url = https://github.com/developing-today/opencode.git
 [submodule "openchamber"]
 	path = openchamber
-	url = https://github.com/developing-today/openchamber.git
+	url = https://github.com/developing-today-forks/openchamber.git
 [submodule "nix"]
 	path = nix
 	url = https://github.com/dezren39/nix.git
