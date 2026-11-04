@@ -57,7 +57,7 @@
             "pull_requests": "write"
           }
         },
-        "dezren39/nix": {
+        "dezren39/darwin-nix": {
           "permissions": {
             "contents": "write",
             "pull_requests": "write"

@@ -90,7 +90,7 @@ Notes:
 
 The image is a **public GHCR package under dezren39**. A job container
 reference is just an image name — the consuming repo's owner doesn't
-matter. The same workflow snippet works verbatim in `dezren39/nix`,
+matter. The same workflow snippet works verbatim in `dezren39/darwin-nix`,
 `developing-today/code`, `developing-today/opencode`, etc.
 (`examples/gha-job-container.yml`):
 

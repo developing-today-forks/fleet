@@ -74,7 +74,7 @@ jobs:
           set -euo pipefail
           targets="{}"
           aligned=true
-          for spec in "code developing-today/code" "opencode developing-today/opencode" "openchamber developing-today/openchamber" "nix dezren39/nix" "zettel developing-today/zettel"; do
+          for spec in "code developing-today/code" "opencode developing-today/opencode" "openchamber developing-today/openchamber" "nix dezren39/darwin-nix" "zettel developing-today/zettel"; do
             set -- $spec; leg=$1; upstream=$2
             git submodule update --init "$leg"
             current=$(git -C "$leg" rev-parse HEAD)
