@@ -1,0 +1,136 @@
+name: fleet umbrella verification
+
+# Twice-daily verification of the fleet umbrella, run through the
+# generic runner (fleet-run.yml, called in its reusable form):
+#
+#   plan   — read this repo's submodule pins off the commit being
+#            run, and turn every public member into one fleet-run
+#            leg pinned at exactly that SHA.
+#   verify — fleet-run checks each member out at its pinned SHA
+#            (shallow) and asserts HEAD == the pin: the pin
+#            resolves, it fetches, and it is the commit the
+#            umbrella records.
+#   smoke  — pull ghcr.io/developing-today/fleet-build:full and run
+#            the fleet's own container smoke (the same command the
+#            variant pipeline gates on): the defining toolchain
+#            (go, git, jq, nix) answers inside the published image.
+#
+# The umbrella's private members (dezren39/cairn, dezren39/hatch,
+# dezren39/hatch-personal) cannot be fetched from GitHub Actions:
+# no credential available to this repo can read them — the same
+# posture as the umbrella's own best-effort private init. The plan
+# job verifies their pins are recorded and reports them as
+# recorded-only; every other member is fetch-verified. If the
+# umbrella gains or loses a member, the plan job fails loudly
+# until this file's RECORDED_ONLY list is reconciled — a member is
+# never silently dropped from verification.
+#
+# Why this exists: docs/execution-surfaces.md. Scheduled health
+# checks are GitHub Actions work, and this is the recurring job
+# that proves the split (and fleet-run's reusable form) end to end.
+
+on:
+  schedule:
+    - cron: "23 6,18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.pins.outputs.jobs }}
+    steps:
+      - name: Check out the umbrella at the run's commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Turn the submodule pins into fleet-run legs
+        id: pins
+        run: |
+          set -euo pipefail
+
+          # Members GitHub Actions cannot fetch (private, and no
+          # credential in this repo can read them). Their pins are
+          # verified as recorded; see the header comment.
+          recorded_only='["dezren39/cairn", "dezren39/hatch", "dezren39/hatch-personal"]'
+
+          # path -> slug from .gitmodules, path -> sha from the tree.
+          subs=$(git config -f .gitmodules --get-regexp 'submodule\..*\.url' | while read -r key url; do
+            name=${key#submodule.}; name=${name%.url}
+            path=$(git config -f .gitmodules --get "submodule.$name.path")
+            slug=${url#https://github.com/}; slug=${slug%.git}
+            jq -cn --arg path "$path" --arg slug "$slug" '{path: $path, slug: $slug}'
+          done | jq -s '.')
+
+          pins=$(git ls-tree HEAD | awk '$2 == "commit" {print $3, $4}' | while read -r sha path; do
+            jq -cn --arg path "$path" --arg sha "$sha" '{path: $path, sha: $sha}'
+          done | jq -s '.')
+
+          members=$(jq -c -n --argjson subs "$subs" --argjson pins "$pins" '
+            [$subs[] | . + {sha: (.path as $p | $pins[] | select(.path == $p) | .sha)}]')
+
+          count=$(jq 'length' <<<"$members")
+          [ "$count" -ge 1 ] || { echo "::error::no submodule members found"; exit 1; }
+          if jq -e 'any(.[]; (.sha | type) != "string" or (.sha | length) != 40)' <<<"$members" >/dev/null; then
+            echo "::error::a submodule has no recorded pin in the tree"
+            exit 1
+          fi
+
+          legs=$(jq -c --argjson skip "$recorded_only" '
+            [ .[] | select(.slug as $s | ($skip | index($s)) | not)
+              | {repo: .slug, ref: .sha, depth: 1,
+                 command: ("test \"$(git rev-parse HEAD)\" = \"" + .sha + "\" && echo \"PIN OK: " + .slug + " @ " + .sha + "\"")}]
+            ' <<<"$members")
+
+          # Coverage assertion: every member is either a
+          # fetch-verified leg or explicitly recorded-only.
+          jq -e --argjson skip "$recorded_only" --argjson legs "$legs" '
+            ([.[] | .slug] | sort) == (([$legs[] | .repo] + $skip) | sort)
+          ' <<<"$members" >/dev/null || {
+            echo "::error::umbrella membership does not match legs + recorded-only; reconcile RECORDED_ONLY in fleet-umbrella-verify.yml"
+            exit 1
+          }
+
+          {
+            echo "## Umbrella pins at ${{ github.sha }}"
+            echo ""
+            jq -r --argjson skip "$recorded_only" '.[] |
+              if (.slug as $s | $skip | index($s)) then
+                "- \(.slug) @ \(.sha) — recorded-only (private member)"
+              else
+                "- \(.slug) @ \(.sha) — fetch-verified"
+              end' <<<"$members"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "jobs=$legs" >> "$GITHUB_OUTPUT"
+          echo "planned $(jq 'length' <<<"$legs") fetch-verified leg(s), $(jq 'length' <<<"$recorded_only") recorded-only"
+
+  verify:
+    name: verify pins via fleet-run
+    needs: plan
+    uses: ./.github/workflows/fleet-run.yml
+    with:
+      jobs: ${{ needs.plan.outputs.jobs }}
+      timeout_minutes: 20
+    secrets:
+      GHCR_ORG_PAT: ${{ secrets.GHCR_ORG_PAT }}
+
+  smoke:
+    name: smoke fleet-build:full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Pull the published image
+        run: docker pull ghcr.io/developing-today/fleet-build:full
+      - name: Smoke — the defining toolchain answers (same command the variant pipeline gates on)
+        run: |
+          docker run --rm ghcr.io/developing-today/fleet-build:full sh -c 'go version && git --version && jq --version && nix --version'

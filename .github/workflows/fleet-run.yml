@@ -51,22 +51,34 @@ name: fleet-run (generic dispatch runner)
 # the escape hatch for the rare history work (bisection,
 # archaeology); everything else wants the shallow default. The
 # setup job validates the expanded legs before
-# anything runs: every repo must be one of the five fleet repos,
+# anything runs: every repo must be on the allowlist (the five
+# core fleet repos plus the fleet umbrella's public members),
 # and the total leg count is capped at 32. Serial composition
 # needs no machinery of its own — it is just shell: put
 # `cmd1 && cmd2` (or `cmd1; cmd2`) in one command string.
 #
 # Guardrails, such as they are, are structural: the workflow only
 # runs on workflow_dispatch (dispatching requires write access to
-# this repo), the target repos are restricted to the five fleet
-# repos (the choice input in single-shot form, an allowlist in the
-# setup job for the jobs form), each leg's timeout is capped at
+# this repo) or as a reusable workflow from a caller in this repo,
+# the target repos are restricted to an allowlist (the five core
+# fleet repos in the single-shot choice input; the jobs-form
+# allowlist in the setup job additionally covers the fleet
+# umbrella's public members so the scheduled umbrella verification
+# can pin-check every public member repo), each leg's timeout is
+# capped at
 # 120 minutes, and every command runs verbatim with its full log on
 # the run page — nothing is hidden or cached away. There is
 # deliberately no concurrency group: every leg gets a fresh runner
 # and container, legs share nothing mutable (the hosted nix caches
 # are content-addressed and append-only), so parallel runs are safe
 # and a group would only serialise them.
+#
+# The same setup/run jobs are also exposed as a reusable workflow
+# (workflow_call, inputs mirroring the dispatch ones) so scheduled
+# fleet jobs can run through this runner instead of re-implementing
+# checkout and validation — the caller in this repo is
+# fleet-umbrella-verify.yml (docs/execution-surfaces.md). Dispatch
+# behaviour is unchanged.
 #
 # The legs run in the published org image
 # ghcr.io/developing-today/fleet-build:full as root: the pinned
@@ -76,7 +88,7 @@ name: fleet-run (generic dispatch runner)
 #   runuser -u vscode -- env HOME=/home/vscode bash -lc '...'
 #
 # Checkout of the target repos uses the classic PAT in
-# GHCR_ORG_PAT (repo scope; it can read all five fleet repos —
+# GHCR_ORG_PAT (repo scope; it can read every repo on the allowlist —
 # this repo's GITHUB_TOKEN could only read this one).
 
 on:
@@ -112,6 +124,41 @@ on:
         type: number
         required: false
         default: 60
+  workflow_call:
+    # Reusable form: a caller workflow in this repo runs the same
+    # setup/run jobs with inputs mirroring the dispatch ones above.
+    # The checkout PAT is not ambient for a called workflow, so the
+    # caller passes it explicitly.
+    inputs:
+      repo:
+        description: "Target repo to check out and run in (single-shot form)"
+        type: string
+        required: false
+        default: ""
+      ref:
+        description: "Branch, tag, or SHA in the target repo (blank = its default branch)"
+        type: string
+        required: false
+        default: ""
+      command:
+        description: "Shell command to run in the checked-out tree (bash -lc; ignored when jobs is given)"
+        type: string
+        required: false
+        default: ""
+      jobs:
+        description: "JSON array of entries — {command, repos: [{repo, ref?, depth?}]} fan-out, {command, together: [{repo, ref?, depth?}, ...]} co-resident, or {repo, ref?, depth?, command} flat — run as a parallel matrix"
+        type: string
+        required: false
+        default: ""
+      timeout_minutes:
+        description: "Per-leg timeout in minutes (5-120, fails fast outside)"
+        type: number
+        required: false
+        default: 60
+    secrets:
+      GHCR_ORG_PAT:
+        description: "Classic PAT the legs use to check out target repos (repo scope)"
+        required: true
 
 permissions:
   contents: read
@@ -143,7 +190,7 @@ jobs:
             exit 1
           }
 
-          allowlist='["developing-today/code", "developing-today/opencode", "developing-today/openchamber", "dezren39/nix", "dezren39/fleet"]'
+          allowlist='["developing-today/code", "developing-today/opencode", "developing-today/openchamber", "dezren39/nix", "dezren39/fleet", "developing-today/zettel", "developing-today/.github", "developing-today/zulip-archive", "developing-today/hardware-doc", "dezren39/zettel"]'
 
           if [ -n "$(tr -d '[:space:]' <<<"$JOBS_INPUT")" ]; then
             raw="$JOBS_INPUT"
@@ -222,8 +269,8 @@ jobs:
           [ "$count" -ge 1 ] || fail "jobs produced no legs"
           [ "$count" -le 32 ] || fail "jobs expand to $count legs; the cap is 32"
 
-          # Validate every leg's repos against the five-repo
-          # allowlist (for together legs, every co-resident repo),
+          # Validate every leg's repos against the allowlist
+          # (for together legs, every co-resident repo),
           # assigning idx in expansion order.
           matrix=$(jq -ce --argjson allow "$allowlist" '
             [ to_entries[] |
@@ -232,12 +279,12 @@ jobs:
                   if all($leg.checkouts[]; .repo as $r | ([$allow[] | . == $r] | any)) then
                     $leg + {idx: .key}
                   else
-                    error("entry leg #\(.key) (together) names a repo outside the five fleet repos")
+                    error("entry leg #\(.key) (together) names a repo outside the fleet-run allowlist")
                   end
                 elif ([$allow[] | . == $leg.repo] | any) then
                   $leg + {idx: .key}
                 else
-                  error("repo \($leg.repo) is not one of the five fleet repos")
+                  error("repo \($leg.repo) is not on the fleet-run allowlist")
                 end
             ]' <<<"$legs") || fail "jobs validation failed (see the error above)"
 
