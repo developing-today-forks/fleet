@@ -2,8 +2,7 @@
 
 Status: **EXECUTED 2026-11-04** — Drew approved execution of the §3
 real-fork move at 07:02 CST ("yes do it all"); the §8 archive move was
-executed earlier the same day. Executed records: §8 (archive) and §9
-(real forks) at the end of this document. Companion docs: `docs/execution-surfaces.md`
+executed earlier the same day. Executed records: §8 (archive), §9 (real forks) and §10 (reconciliation sweep) at the end of this document. Companion docs: `docs/execution-surfaces.md`
 (surface routing), `docs/placement.md` in the fleet copies (surface
 registry).
 
@@ -367,3 +366,60 @@ Branch counts moved between the morning census and the move-day
 snapshots (openchamber 104 → 52, opencode 96 → 57) through the
 repos' own branch-cleanup workflows — each transfer was verified
 against a fresh same-hour snapshot, not the census.
+
+## 10. Reconciliation sweep — EXECUTED 2026-11-04 (later pass)
+
+The forks-org sweep agent's session ended before its census record
+was written down anywhere durable; this pass re-derived the
+classification of every repo still in developing-today-forks from
+live evidence, to confirm nothing pure was left behind and nothing
+real was at risk.
+
+- Method: for all 38 repos — default-branch commit counts filtered
+  by author (`dezren39`, `developing-today[bot]`), divergence vs
+  parent (compare ahead/behind), PR authorship, and — for every
+  repo whose default branch carried none of Drew's commits — a
+  per-branch authorship scan (the §8 `helper` lesson: divergence
+  can live entirely on side branches).
+- Result: **zero transfers.** Every remaining repo carries
+  dezren39-authored work:
+  - The four §9 working forks: opencode (1531 default-branch
+    commits by dezren39), openchamber (1303), kaneo (3),
+    nix-openclaw (4).
+  - Fleet-internal: `fleet` (70) and `zig-overlay` (its parent is
+    dezren39/zig-overlay).
+  - 22 forks with dezren39 commits on the default branch —
+    incl. nixpkgs (1 commit, 3 PRs, 264 ahead of NixOS/nixpkgs),
+    home-manager, charm, emanote, koanf (plus 3 in-repo PRs),
+    nixpkgs-vim-extra-plugins (52), scoop-charmbracelet (20).
+    microvm.nix, server.nix and sops-nix in this set are also
+    live flake inputs of developing-today/code (flake.lock
+    nodes, re-verified this pass).
+  - 8 forks whose only dezren39 work is a small patch branch:
+    amp (`time`, 1 commit), runiq (`time`, 1), raytrace.roc
+    (`update`, 1), libsql-client-go (`antlr4-dep`, 1), porkbun
+    (`improvements`, 3), sqlite-antlr4-parser (`antlr4-dep`, 3),
+    ssh (`conpty`, 2), octto-fork (`feat/nix-dev-shell` +
+    `feat/top-level-model`, 3).
+  - `log`: no dezren39 commits on the default branch, but open
+    PR #1 authored by dezren39 with its head branch in-repo —
+    a working fork.
+  This reproduces the original census exactly (31 REAL + fleet +
+  zig-overlay + the held repo below = the 34 post-sweep
+  remainder, plus the 4 §9 arrivals = 38), so the 54 §8
+  transfers stand as the complete pure set.
+- HELD (unchanged from §8): `nixos-unattended-installer` is pure
+  by every authorship/divergence measure — identical to parent
+  chrillefkr/nixos-unattended-installer, single branch, zero
+  dezren39/app commits or PRs — but it remains a live flake
+  input of developing-today/code (flake.nix
+  `unattended-installer.url =
+  "github:developing-today-forks/nixos-unattended-installer"`
+  plus a flake.lock node, re-verified this pass). It moves only
+  together with a repoint of that input; left in forks pending
+  that decision.
+- Final counts: developing-today-forks 38 repos,
+  developing-today-vendored 70. Backup stores: no transfers
+  this pass, so no store ports — the forks-org mirrors under
+  `~/backups/github/developing-today-forks/` already cover the
+  remaining repos (36 stores, incl. opencode/openchamber/kaneo).
