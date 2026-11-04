@@ -1,0 +1,85 @@
+name: sync-upstream (daily pull from dezren39/fleet)
+
+# The org forks of this repo (developing-today/fleet and
+# developing-today-forks/fleet) are ACTIONS-ONLY mirrors: nobody commits
+# there — commits happen here, upstream, and flow down. This workflow is
+# therefore defined HERE, upstream, so it is part of the tree the forks
+# sync; a fork-local workflow file would be erased by the very sync it
+# performs.
+#
+# In a fork, the daily run pulls dezren39/fleet main into the fork's
+# main: fast-forward when the fork is a strict prefix of upstream, a
+# clean merge otherwise. A merge CONFLICT (true content divergence)
+# aborts the merge and fails the job loudly — it never force-pushes and
+# never auto-resolves a conflict. In dezren39/fleet itself the job is a
+# guarded no-op.
+#
+# On conflict the job also tries to open an issue on dezren39/fleet.
+# The in-workflow token is scoped to the fork repo only, so that filing
+# is best-effort (expected to fail without an app token); the loud job
+# failure is the guaranteed signal.
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: pull upstream main
+    if: github.repository != 'dezren39/fleet'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out this fork's main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pull dezren39/fleet main
+        id: pull
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/dezren39/fleet.git
+          git fetch upstream main
+          local_head=$(git rev-parse HEAD)
+          up_head=$(git rev-parse upstream/main)
+          echo "fork head:     $local_head"
+          echo "upstream head: $up_head"
+          if [ "$local_head" = "$up_head" ]; then
+            echo "already up to date with dezren39/fleet main — nothing to pull"
+            echo "result=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$local_head" "$up_head"; then
+            git merge --ff-only "$up_head"
+            echo "result=fast-forward" >> "$GITHUB_OUTPUT"
+          else
+            if ! git merge --no-edit "$up_head"; then
+              git merge --abort || true
+              echo "::error title=sync-upstream divergence::dezren39/fleet main conflicts with this fork's main — merge aborted, nothing pushed. Commits belong in dezren39/fleet."
+              echo "result=conflict" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          fi
+          git push origin HEAD:main
+          echo "synced: $local_head -> $(git rev-parse HEAD)"
+
+      - name: File an issue upstream on conflict (best effort)
+        if: failure() && steps.pull.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo dezren39/fleet \
+            --title "sync-upstream: ${{ github.repository }} main has diverged from upstream" \
+            --body "The daily sync-upstream run in ${{ github.repository }} hit a merge conflict pulling dezren39/fleet main, aborted the merge, and pushed nothing. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Commits belong upstream in dezren39/fleet; this fork's main needs a manual convergence." \
+          || echo "::warning::could not file the upstream issue with the workflow token (expected without an app token) — the failed job above is the signal."
