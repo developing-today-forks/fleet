@@ -3,7 +3,7 @@
 	url = https://github.com/developing-today/code.git
 [submodule "opencode"]
 	path = opencode
-	url = https://github.com/developing-today/opencode.git
+	url = https://github.com/developing-today-forks/opencode.git
 [submodule "openchamber"]
 	path = openchamber
 	url = https://github.com/developing-today-forks/openchamber.git
