@@ -19,7 +19,7 @@ this repo is the prebuild play.
 | `code/` | developing-today/code |
 | `opencode/` | developing-today/opencode |
 | `openchamber/` | developing-today/openchamber |
-| `nix/` | dezren39/nix |
+| `nix/` | dezren39/darwin-nix |
 | `zettel/` | developing-today/zettel |
 | `hatch/` | dezren39/hatch |
 | `hatch-personal/` | dezren39/hatch-personal (private) |

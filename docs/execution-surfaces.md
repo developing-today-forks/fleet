@@ -86,7 +86,7 @@ single-shot dispatch form (`repo` choice + `ref` + `command`).
 
 `fleet-run`'s allowlist is the five core fleet repos —
 `developing-today/code`, `developing-today/opencode`,
-`developing-today/openchamber`, `dezren39/nix`, `dezren39/fleet` —
+`developing-today/openchamber`, `dezren39/darwin-nix`, `dezren39/fleet` —
 plus the fleet umbrella's public members: `developing-today/zettel`,
 `developing-today/.github`, `developing-today/zulip-archive`,
 `developing-today/hardware-doc`, `dezren39/zettel`,

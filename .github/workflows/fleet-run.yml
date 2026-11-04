@@ -21,7 +21,7 @@ name: fleet-run (generic dispatch runner)
 #
 #   {"command": "nix flake check",
 #    "repos": [{"repo": "developing-today/code"},
-#              {"repo": "dezren39/nix", "ref": "main"}]}
+#              {"repo": "dezren39/darwin-nix", "ref": "main"}]}
 #
 # Flat sugar — exactly one leg:
 #
@@ -102,7 +102,7 @@ on:
           - developing-today/code
           - developing-today/opencode
           - developing-today/openchamber
-          - dezren39/nix
+          - dezren39/darwin-nix
           - dezren39/fleet
       ref:
         description: "Branch, tag, or SHA in the target repo (blank = its default branch)"
@@ -190,7 +190,7 @@ jobs:
             exit 1
           }
 
-          allowlist='["developing-today/code", "developing-today/opencode", "developing-today/openchamber", "dezren39/nix", "dezren39/fleet", "developing-today/zettel", "developing-today/.github", "developing-today/zulip-archive", "developing-today/hardware-doc", "dezren39/zettel", "dezren39/hatch"]'
+          allowlist='["developing-today/code", "developing-today/opencode", "developing-today/openchamber", "dezren39/darwin-nix", "dezren39/fleet", "developing-today/zettel", "developing-today/.github", "developing-today/zulip-archive", "developing-today/hardware-doc", "dezren39/zettel", "dezren39/hatch"]'
 
           if [ -n "$(tr -d '[:space:]' <<<"$JOBS_INPUT")" ]; then
             raw="$JOBS_INPUT"
