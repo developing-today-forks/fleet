@@ -29,12 +29,14 @@ on:
     - cron: "23 4 * * *"
   workflow_dispatch:
 
+# contents: write is the whole grant on purpose. There is no
+# `workflows` key in the GITHUB_TOKEN permissions schema (the file
+# fails to parse with one), and the workflow token cannot push
+# workflow-file payloads at all — that gate is exactly why the sync
+# pushes with the APP token, which carries the app's own workflows
+# permission.
 permissions:
   contents: write
-  # So a payload that itself touches workflow files is not rejected
-  # when the token in play is the workflow token (the app token used
-  # for the push already carries the app's own workflows permission).
-  workflows: write
 
 concurrency:
   group: sync-upstream
