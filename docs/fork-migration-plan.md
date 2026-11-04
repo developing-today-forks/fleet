@@ -204,9 +204,8 @@ string plus parsed flake.lock nodes (owner == developing-today).
 
 ## 8. Pure-clone archive move (parameterized checklist)
 
-- Archive org: `<ARCHIVE_ORG>` — Drew to name (candidates on the
-  table: `vendor` vs `vendored`). Everything below is parameterized
-  on that name; nothing here executes before the ruling.
+- Archive org: `developing-today-vendored` — resolved by Drew
+  2026-11-04 (picked over `developing-today-vendor`).
 - Transfer list: every developing-today fork the census classifies
   PURE CLONE. The list is deliberately not hardcoded in this plan —
   it lands from the census classifications (divergence evidence per
@@ -217,9 +216,20 @@ string plus parsed flake.lock nodes (owner == developing-today).
         developing-today/openchamber, dezren39/fleet `.gitmodules`,
         and the pm-stack configs.
   - [ ] No references → transfer directly (mechanics per §2,
-        destination `<ARCHIVE_ORG>`).
+        destination `developing-today-vendored`).
   - [ ] Referenced → repoint the references in the same pass
         (§4 mechanics), then transfer.
   - [ ] Run the §6 checklist anyway (expected empty for pure
         clones, but cheap): secrets names, webhooks, installations.
   - [ ] Verify post-transfer + hold the old name (§2).
+- EXECUTED 2026-11-04: all 10 census-classified pure clones were
+  transferred from developing-today to developing-today-vendored:
+  okd, ironic-baremetal-nodes-on-ESXi-Host,
+  cluster-api-provider-libvirt, terraform-provider-libvirt,
+  nomados, dns, consul-dns, balanced-employee-ip-agreement,
+  innovators-patent-agreement, webspace-sdk.github.io. Each was
+  reference-gated first (the only fleet references were the
+  repo-universe.yaml entries, repointed in developing-today/code
+  PR #5426) and verified at the new owner with its default branch
+  intact; the old developing-today paths redirect to the new
+  locations.
