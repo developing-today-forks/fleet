@@ -3,7 +3,19 @@
   "customizations": {
     "codespaces": {
       "repositories": {
+        "developing-today/.github": {
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write"
+          }
+        },
         "developing-today/code": {
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write"
+          }
+        },
+        "developing-today/hardware-doc": {
           "permissions": {
             "contents": "write",
             "pull_requests": "write"
@@ -27,6 +39,12 @@
             "pull_requests": "write"
           }
         },
+        "developing-today/zulip-archive": {
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write"
+          }
+        },
         "dezren39/hatch": {
           "permissions": {
             "contents": "write",
@@ -40,6 +58,12 @@
           }
         },
         "dezren39/nix": {
+          "permissions": {
+            "contents": "write",
+            "pull_requests": "write"
+          }
+        },
+        "dezren39/zettel": {
           "permissions": {
             "contents": "write",
             "pull_requests": "write"
