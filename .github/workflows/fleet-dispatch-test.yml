@@ -1,0 +1,198 @@
+name: fleet-dispatch-test
+
+# Generic explicit-dispatch job runner for `fleet dispatch-test`
+# (design: developing-today/code#6580, phase 2 — Drew's corrected
+# execution model). This workflow lives ONLY in the fleet repo
+# (dezren39/fleet, the submodule umbrella); the repo's copies —
+# the source plus every fork found by following its fork network —
+# inherit it, and those copies are the execution homes that
+# `fleet dispatch-test scan` discovers and selects between.
+#
+# workflow_dispatch ONLY — no push/PR/schedule triggers, per the
+# standing no-auto-CI ruling (code#5663, closed: no triggers).
+#
+# The job payload lives in the fleet-dispatch-jobs Turso store
+# under the internal job id passed as the sole input. The payload
+# names a SUBMODULE of this repo + a REF + COMMANDS: this workflow
+# checks out the fleet repo, checks out the named submodule at
+# the named ref, runs the commands inside the submodule checkout,
+# and ALWAYS writes status/output back to the store, even on
+# failure (a cancelled run is the best-effort exception — its row
+# stays `running`, which `status` reports honestly).
+#
+# Nix cache: the job runs in ghcr.io/developing-today/fleet-build:full,
+# the image whose baked Nix store is this repo's partial preloaded
+# cache — per-submodule dev-shell closures realised from each
+# submodule's flake.lock exactly as committed (see
+# containers/fleet-build/warm-manifest.txt and
+# fleet-build-container.yml) — with the fleet substituters baked
+# in. This is the same image and cache wiring fleet-run.yml uses;
+# nothing new is invented here. NIX_CONFIG below mirrors
+# containers/fleet-build/export.sh because job-container steps run
+# as root, which has no nix.conf of its own.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "fleet dispatch-test job id"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run-job:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/developing-today/fleet-build:full
+      options: --user root
+    env:
+      TURSO_URL: ${{ vars.DISPATCH_TURSO_URL }}
+      TURSO_TOKEN: ${{ secrets.DISPATCH_TURSO_TOKEN }}
+      JOB_ID: ${{ inputs.job_id }}
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes ca-derivations
+        sandbox = false
+        eval-cache = false
+        build-users-group =
+        extra-substituters = https://nix-cache.developing-today.workers.dev https://developing-today.cachix.org
+        extra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8= developing-today.cachix.org-1:dfIGqIJODUw9V/O9yUrYP2d3tjJtk3SZTDxOBWn9vN4=
+    steps:
+      - name: Nix profile on PATH
+        shell: bash
+        run: echo "/home/vscode/.nix-profile/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch job by id and mark running
+        id: fetch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TURSO_URL}" ] || [ -z "${TURSO_TOKEN}" ]; then
+            echo "dispatch store not configured (DISPATCH_TURSO_URL var / DISPATCH_TURSO_TOKEN secret missing)"
+            exit 1
+          fi
+          jq -n \
+            --arg id "$JOB_ID" --arg rid "$GITHUB_RUN_ID" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{requests: [
+              {type: "execute", stmt: {sql: "select submodule, target_ref, coalesce(commands, script) from jobs where id = ?", args: [{type: "text", value: $id}]}},
+              {type: "execute", stmt: {sql: "update jobs set status = '"'"'running'"'"', run_id = ?, run_url = ?, updated_at = strftime('"'"'%Y-%m-%dT%H:%M:%SZ'"'"', '"'"'now'"'"') where id = ?", args: [{type: "integer", value: $rid}, {type: "text", value: $url}, {type: "text", value: $id}]}},
+              {type: "close"}
+            ]}' > "$RUNNER_TEMP/pipeline.json"
+          curl -sS -X POST "$TURSO_URL/v2/pipeline" \
+            -H "Authorization: Bearer $TURSO_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @"$RUNNER_TEMP/pipeline.json" > "$RUNNER_TEMP/resp.json"
+          if ! jq -e '.results[0].type == "ok"' "$RUNNER_TEMP/resp.json" > /dev/null; then
+            echo "dispatch store fetch failed for job $JOB_ID:"
+            head -c 1000 "$RUNNER_TEMP/resp.json"
+            exit 1
+          fi
+          row=$(jq -c '.results[0].response.result.rows[0] // empty' "$RUNNER_TEMP/resp.json")
+          if [ -z "$row" ]; then
+            echo "job $JOB_ID not found in dispatch store"
+            exit 1
+          fi
+          submodule=$(jq -r '.results[0].response.result.rows[0][0].value // ""' "$RUNNER_TEMP/resp.json")
+          ref=$(jq -r '.results[0].response.result.rows[0][1].value // ""' "$RUNNER_TEMP/resp.json")
+          jq -r '.results[0].response.result.rows[0][2].value // ""' "$RUNNER_TEMP/resp.json" > "$RUNNER_TEMP/job-commands.sh"
+          if [ -z "$submodule" ]; then
+            echo "job $JOB_ID names no submodule (pre-phase-2 row?) — nothing to run"
+            exit 1
+          fi
+          echo "submodule=$submodule" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "fetched job $JOB_ID (submodule $submodule, ref '${ref:-<recorded SHA>}', commands $(wc -c < "$RUNNER_TEMP/job-commands.sh") bytes)"
+
+      - name: Check out the fleet repo
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Check out the named submodule at the named ref
+        id: sub
+        shell: bash
+        env:
+          SUBMODULE: ${{ steps.fetch.outputs.submodule }}
+          JOB_REF: ${{ steps.fetch.outputs.ref }}
+          GHCR_ORG_PAT: ${{ secrets.GHCR_ORG_PAT }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory '*'
+          : > job-output.log
+          path=$(git config -f .gitmodules --get "submodule.${SUBMODULE}.path" || true)
+          if [ -z "$path" ]; then
+            echo "submodule $SUBMODULE is not in this repo's .gitmodules" | tee -a job-output.log
+            exit 1
+          fi
+          # Private submodules (hatch-personal, cairn) need a token
+          # that can read them; the fleet's classic PAT rides the
+          # GHCR_ORG_PAT secret where the copy has it. Public
+          # submodules clone anonymously without it.
+          if [ -n "${GHCR_ORG_PAT:-}" ]; then
+            git config --global url."https://x-access-token:${GHCR_ORG_PAT}@github.com/".insteadOf "https://github.com/"
+          fi
+          git submodule update --init -- "$path" 2>&1 | tee -a job-output.log
+          cd "$GITHUB_WORKSPACE/$path"
+          if [ -n "$JOB_REF" ]; then
+            git fetch --tags origin "$JOB_REF" 2>&1 | tee -a "$GITHUB_WORKSPACE/job-output.log"
+            git checkout -q FETCH_HEAD
+          fi
+          echo "submodule $SUBMODULE at $path HEAD $(git rev-parse HEAD)" | tee -a "$GITHUB_WORKSPACE/job-output.log"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Execute job commands
+        id: exec
+        shell: bash
+        run: |
+          set +e
+          cd "$GITHUB_WORKSPACE/${{ steps.sub.outputs.path }}"
+          echo "running job commands in $(pwd)" >> "$GITHUB_WORKSPACE/job-output.log"
+          bash -l "$RUNNER_TEMP/job-commands.sh" 2>&1 | tee -a "$GITHUB_WORKSPACE/job-output.log"
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "job commands exited $code" >> "$GITHUB_WORKSPACE/job-output.log"
+
+      - name: Write status and output back (always)
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          code='${{ steps.exec.outputs.code }}'
+          if [ -z "$code" ]; then
+            status="error"; ecarg='{"type": "null"}'
+          else
+            if [ "$code" = "0" ]; then status="succeeded"; else status="failed"; fi
+            ecarg="{\"type\": \"integer\", \"value\": \"$code\"}"
+          fi
+          tail -c 6000 "$GITHUB_WORKSPACE/job-output.log" > "$RUNNER_TEMP/tail.txt" 2>/dev/null || : > "$RUNNER_TEMP/tail.txt"
+          jq -n \
+            --arg id "$JOB_ID" --arg status "$status" --argjson ecarg "$ecarg" \
+            --rawfile tail "$RUNNER_TEMP/tail.txt" \
+            '{requests: [
+              {type: "execute", stmt: {sql: "update jobs set status = ?, exit_code = ?, output_tail = ?, updated_at = strftime('"'"'%Y-%m-%dT%H:%M:%SZ'"'"', '"'"'now'"'"') where id = ?", args: [{type: "text", value: $status}, $ecarg, {type: "text", value: $tail}, {type: "text", value: $id}]}},
+              {type: "close"}
+            ]}' > "$RUNNER_TEMP/writeback.json"
+          curl -sS -X POST "$TURSO_URL/v2/pipeline" \
+            -H "Authorization: Bearer $TURSO_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @"$RUNNER_TEMP/writeback.json" > "$RUNNER_TEMP/writeback-resp.json"
+          if jq -e '.results[0].type == "ok"' "$RUNNER_TEMP/writeback-resp.json" > /dev/null; then
+            echo "wrote back status=$status for job $JOB_ID"
+          else
+            echo "WRITEBACK FAILED for job $JOB_ID"
+            cat "$RUNNER_TEMP/writeback-resp.json"
+            exit 1
+          fi
+
+      - name: Upload job output artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-job-${{ inputs.job_id }}
+          path: job-output.log
+          retention-days: 14
+          if-no-files-found: ignore
