@@ -182,3 +182,7 @@ takes commits. `developing-today/fleet` and
   app lands the forks' own rare direct changes (placement registry,
   convergences) by PR; everything else arrives via the daily pull.
   This repo, the upstream, is deliberately **not** locked.
+
+## Fleet command dispatch
+
+The current dispatch-only entry point is `.github/workflows/fleet-command.yml`. It runs commands submitted by `fleet queue dispatch` / `repo-queue dispatch`; it does not start from pull-request or main-branch CI. It restores the Fleet Rust/Go dependency caches, can restore a previous `fleet-output` artifact, and publishes new output under `target/fleet-output/`. See the developing-today/code `doc/fleet-execution-handoff.md` for commands, placement policy, followups, and authentication requirements.

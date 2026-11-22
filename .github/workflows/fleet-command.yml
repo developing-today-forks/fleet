@@ -1,0 +1,212 @@
+name: fleet-command
+run-name: "Fleet command ${{ inputs.repo }} (${{ inputs.dispatch_id }})"
+
+# Dispatch-only runner used by repo-queue dispatch. No PR or main-branch
+# checks gate execution; placement selects a surface before this starts.
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Target owner/repository"
+        type: string
+        required: true
+      command:
+        description: "Command run from the target checkout"
+        type: string
+        required: true
+      ref:
+        description: "Branch, tag, or commit; blank uses the target default branch"
+        type: string
+        required: false
+        default: ""
+      runner:
+        description: "Runner provider"
+        type: choice
+        required: false
+        default: github
+        options: [github, blacksmith]
+      platform:
+        description: "Operating system; macOS is opt-in"
+        type: choice
+        required: false
+        default: linux
+        options: [linux, macos]
+      container_image:
+        description: "Linux container image; blank uses the standard Fleet build image"
+        type: string
+        required: false
+        default: ""
+      actions_cache_key:
+        description: "Cache namespace prefix"
+        type: string
+        required: false
+        default: fleet-deps-v1
+      actions_cache_path:
+        description: "Additional newline-separated paths to cache"
+        type: string
+        required: false
+        default: ""
+      actions_cache_restore_keys:
+        description: "Additional newline-separated cache restore prefixes"
+        type: string
+        required: false
+        default: ""
+      previous_run_id:
+        description: "Optional prior Fleet run whose fleet-output artifact should be downloaded"
+        type: string
+        required: false
+        default: ""
+      previous_run_repo:
+        description: "Host repository containing the prior run"
+        type: string
+        required: false
+        default: ""
+      push_nix_cache:
+        description: "Sign and upload ./result to the shared Fleet Nix cache"
+        type: boolean
+        required: false
+        default: false
+      timeout_minutes:
+        description: "Run timeout (5-120 minutes)"
+        type: number
+        required: false
+        default: 60
+      dispatch_id:
+        description: "Fleet session handle shown in the run title"
+        type: string
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      repo:
+        type: string
+        required: true
+      command:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: false
+        default: ""
+      runner:
+        type: string
+        required: false
+        default: github
+      platform:
+        type: string
+        required: false
+        default: linux
+      container_image:
+        type: string
+        required: false
+        default: ""
+      actions_cache_key:
+        type: string
+        required: false
+        default: fleet-deps-v1
+      actions_cache_path:
+        type: string
+        required: false
+        default: ""
+      actions_cache_restore_keys:
+        type: string
+        required: false
+        default: ""
+      previous_run_id:
+        type: string
+        required: false
+        default: ""
+      previous_run_repo:
+        type: string
+        required: false
+        default: ""
+      push_nix_cache:
+        type: boolean
+        required: false
+        default: false
+      timeout_minutes:
+        type: number
+        required: false
+        default: 60
+      dispatch_id:
+        type: string
+        required: false
+        default: ""
+    secrets:
+      GHCR_ORG_PAT:
+        description: "Token with repo read and actions read access for cross-repository checkouts/artifacts"
+        required: false
+      NIX_CACHE_SIGNING_KEY:
+        required: false
+      NIX_CACHE_UPLOAD_URL:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  run_linux:
+    name: "Linux (${{ inputs.repo }})"
+    if: ${{ inputs.platform == 'linux' }}
+    runs-on: ${{ inputs.runner == 'blacksmith' && github.repository == 'developing-today/fleet' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    container:
+      image: ${{ inputs.container_image != '' && inputs.container_image || 'ghcr.io/dezren39/fleet-build:full' }}
+      options: --user root
+    steps:
+      - name: Check out the Fleet runner repository
+        uses: actions/checkout@v4
+      - name: Execute target command
+        uses: ./.github/actions/fleet-command
+        with:
+          workflow_repo: ${{ github.repository }}
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          command: ${{ inputs.command }}
+          runner: ${{ inputs.runner }}
+          platform: ${{ inputs.platform }}
+          dispatch_id: ${{ inputs.dispatch_id }}
+          checkout_token: ${{ secrets.GHCR_ORG_PAT || github.token }}
+          artifact_token: ${{ secrets.GHCR_ORG_PAT || github.token }}
+          cache_key: ${{ inputs.actions_cache_key }}
+          cache_path: ${{ inputs.actions_cache_path }}
+          cache_restore_keys: ${{ inputs.actions_cache_restore_keys }}
+          previous_run_id: ${{ inputs.previous_run_id }}
+          previous_run_repo: ${{ inputs.previous_run_repo }}
+          push_nix_cache: ${{ inputs.push_nix_cache }}
+          nix_cache_signing_key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+          nix_cache_upload_url: ${{ secrets.NIX_CACHE_UPLOAD_URL }}
+
+  run_macos:
+    name: "macOS (${{ inputs.repo }})"
+    if: ${{ inputs.platform == 'macos' }}
+    runs-on: macos-15
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - name: Check out the Fleet runner repository
+        uses: actions/checkout@v4
+      - name: Execute target command
+        uses: ./.github/actions/fleet-command
+        with:
+          workflow_repo: ${{ github.repository }}
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          command: ${{ inputs.command }}
+          runner: ${{ inputs.runner }}
+          platform: ${{ inputs.platform }}
+          dispatch_id: ${{ inputs.dispatch_id }}
+          checkout_token: ${{ secrets.GHCR_ORG_PAT || github.token }}
+          artifact_token: ${{ secrets.GHCR_ORG_PAT || github.token }}
+          cache_key: ${{ inputs.actions_cache_key }}
+          cache_path: ${{ inputs.actions_cache_path }}
+          cache_restore_keys: ${{ inputs.actions_cache_restore_keys }}
+          previous_run_id: ${{ inputs.previous_run_id }}
+          previous_run_repo: ${{ inputs.previous_run_repo }}
+          push_nix_cache: ${{ inputs.push_nix_cache }}
+          nix_cache_signing_key: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+          nix_cache_upload_url: ${{ secrets.NIX_CACHE_UPLOAD_URL }}

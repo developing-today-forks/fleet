@@ -1,0 +1,253 @@
+name: Fleet command execution
+description: Checkout, restore Rust/Go caches and prior output, run a command, and publish reusable output.
+inputs:
+  workflow_repo:
+    required: true
+  repo:
+    required: true
+  ref:
+    required: false
+    default: ""
+  command:
+    required: true
+  runner:
+    required: true
+  platform:
+    required: true
+  dispatch_id:
+    required: false
+    default: ""
+  checkout_token:
+    required: true
+  artifact_token:
+    required: true
+  cache_key:
+    required: false
+    default: fleet-deps-v1
+  cache_path:
+    required: false
+    default: ""
+  cache_restore_keys:
+    required: false
+    default: ""
+  previous_run_id:
+    required: false
+    default: ""
+  previous_run_repo:
+    required: false
+    default: ""
+  push_nix_cache:
+    required: false
+    default: "false"
+  nix_cache_signing_key:
+    required: false
+    default: ""
+  nix_cache_upload_url:
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Validate dispatch before checkout
+      shell: bash
+      env:
+        WORKFLOW_REPO: ${{ inputs.workflow_repo }}
+        TARGET_REPO: ${{ inputs.repo }}
+        TARGET_COMMAND: ${{ inputs.command }}
+        RUNNER_PROVIDER: ${{ inputs.runner }}
+        TARGET_PLATFORM: ${{ inputs.platform }}
+        CACHE_KEY: ${{ inputs.cache_key }}
+        PREVIOUS_RUN_ID: ${{ inputs.previous_run_id }}
+        PREVIOUS_RUN_REPO: ${{ inputs.previous_run_repo }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::$1"; exit 1; }
+        [[ "$TARGET_REPO" =~ ^(dezren39|developing-today|developing-today-forks)/[A-Za-z0-9._-]+$ ]] \
+          || fail "repo must be owner/repository under a configured Fleet owner"
+        [ -n "$TARGET_COMMAND" ] || fail "command is required"
+        [[ "$RUNNER_PROVIDER" == github || "$RUNNER_PROVIDER" == blacksmith ]] \
+          || fail "runner must be github or blacksmith"
+        [[ "$TARGET_PLATFORM" == linux || "$TARGET_PLATFORM" == macos ]] \
+          || fail "platform must be linux or macos"
+        if [ "$RUNNER_PROVIDER" = blacksmith ]; then
+          [ "$WORKFLOW_REPO" = "developing-today/fleet" ] \
+            || fail "Blacksmith is enabled only on developing-today/fleet"
+          [ "$TARGET_PLATFORM" = linux ] || fail "Blacksmith provides Linux runners only"
+        fi
+        if [ -n "$PREVIOUS_RUN_ID" ] || [ -n "$PREVIOUS_RUN_REPO" ]; then
+          [[ "$PREVIOUS_RUN_ID" =~ ^[0-9]+$ ]] || fail "previous_run_id must be numeric"
+          [[ "$PREVIOUS_RUN_REPO" =~ ^(dezren39|developing-today|developing-today-forks)/[A-Za-z0-9._-]+$ ]] \
+            || fail "previous_run_repo must be owner/repository under a configured Fleet owner"
+        fi
+        [ -n "$CACHE_KEY" ] || fail "cache key prefix cannot be empty"
+
+    - name: Check out target repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repo }}
+        ref: ${{ inputs.ref }}
+        token: ${{ inputs.checkout_token }}
+        path: target
+
+    - name: Download previous Fleet output
+      if: ${{ inputs.previous_run_id != '' }}
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: fleet-output
+        repository: ${{ inputs.previous_run_repo }}
+        run-id: ${{ inputs.previous_run_id }}
+        github-token: ${{ inputs.artifact_token }}
+        path: .fleet/previous-output
+
+    - name: Prepare shared Rust and Go cache
+      id: cache-settings
+      shell: bash
+      env:
+        TARGET_REF: ${{ inputs.ref }}
+        CACHE_PREFIX: ${{ inputs.cache_key }}
+        EXTRA_CACHE_PATHS: ${{ inputs.cache_path }}
+        EXTRA_RESTORE_KEYS: ${{ inputs.cache_restore_keys }}
+      run: |
+        set -euo pipefail
+        cache_root="$GITHUB_WORKSPACE/.fleet/cache"
+        cargo_home="$cache_root/cargo"
+        cargo_target="$cache_root/cargo-target"
+        rustup_home="$cache_root/rustup"
+        go_path="$cache_root/go"
+        go_modcache="$go_path/pkg/mod"
+        go_cache="$go_path/build"
+        {
+          printf 'CARGO_HOME=%s\n' "$cargo_home"
+          printf 'CARGO_TARGET_DIR=%s\n' "$cargo_target"
+          printf 'RUSTUP_HOME=%s\n' "$rustup_home"
+          printf 'GOPATH=%s\n' "$go_path"
+          printf 'GOMODCACHE=%s\n' "$go_modcache"
+          printf 'GOCACHE=%s\n' "$go_cache"
+        } >> "$GITHUB_ENV"
+        mkdir -p "$cargo_home" "$cargo_target" "$rustup_home" "$go_modcache" "$go_cache"
+
+        target_ref="$TARGET_REF"
+        if [ -z "$target_ref" ]; then
+          target_ref="$(git -C target branch --show-current)"
+        fi
+        if [ -z "$target_ref" ]; then
+          target_ref="$(git -C target rev-parse --short HEAD)"
+        fi
+        target_ref="$(printf '%s' "$target_ref" | tr -c 'A-Za-z0-9._-' '-')"
+        dependency_hash="$(
+        python3 -c '
+        import hashlib
+        import pathlib
+        import subprocess
+
+        root = pathlib.Path("target")
+        manifest_names = {
+            "Cargo.lock", "go.mod", "go.sum", "go.work", "flake.lock",
+            "rust-toolchain", "rust-toolchain.toml", "package-lock.json",
+            "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock",
+            "requirements.txt", "Pipfile.lock",
+        }
+        digest = hashlib.sha256()
+        for path in sorted(p for p in root.rglob("*") if p.is_file() and p.name in manifest_names):
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(b"|")
+            digest.update(path.read_bytes())
+            digest.update(b"|")
+        for command in (("rustc", "--version"), ("go", "version"), ("nix", "--version")):
+            try:
+                version = subprocess.check_output(command, stderr=subprocess.STDOUT, text=True, timeout=5).strip()
+            except (OSError, subprocess.SubprocessError):
+                version = "unavailable"
+            digest.update(" ".join(command).encode())
+            digest.update(b"|")
+            digest.update(version.encode())
+            digest.update(b"|")
+        print(digest.hexdigest()[:20])
+        '
+        )"
+        cache_key="${CACHE_PREFIX}-${RUNNER_OS}-${dependency_hash}-${target_ref}"
+        cache_paths="$(printf '%s\n' \
+          ".fleet/cache/cargo" \
+          ".fleet/cache/cargo-target" \
+          ".fleet/cache/rustup" \
+          ".fleet/cache/go/pkg/mod" \
+          ".fleet/cache/go/build")"
+        if [ -n "$EXTRA_CACHE_PATHS" ]; then
+          cache_paths="${cache_paths}"$'\n'"${EXTRA_CACHE_PATHS}"
+        fi
+        restore_keys="$EXTRA_RESTORE_KEYS"
+        if [ -n "$restore_keys" ]; then
+          restore_keys="${restore_keys}"$'\n'
+        fi
+        restore_keys="${restore_keys}${CACHE_PREFIX}-${RUNNER_OS}-${dependency_hash}-"$'\n'"${CACHE_PREFIX}-${RUNNER_OS}-"
+        {
+          printf 'key=%s\n' "$cache_key"
+          printf 'paths<<FLEET_CACHE_PATHS\n%s\nFLEET_CACHE_PATHS\n' "$cache_paths"
+          printf 'restore_keys<<FLEET_CACHE_KEYS\n%s\nFLEET_CACHE_KEYS\n' "$restore_keys"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore language and build caches
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.cache-settings.outputs.paths }}
+        key: ${{ steps.cache-settings.outputs.key }}
+        restore-keys: ${{ steps.cache-settings.outputs.restore_keys }}
+
+    - name: Run command
+      env:
+        FLEET_RUN_COMMAND: ${{ inputs.command }}
+        FLEET_DISPATCH_ID: ${{ inputs.dispatch_id }}
+        FLEET_PREVIOUS_RUN_ID: ${{ inputs.previous_run_id }}
+        FLEET_PREVIOUS_OUTPUT_DIR: ${{ github.workspace }}/.fleet/previous-output
+        FLEET_OUTPUT_DIR: ${{ github.workspace }}/target/fleet-output
+        CARGO_HOME: ${{ github.workspace }}/.fleet/cache/cargo
+        CARGO_TARGET_DIR: ${{ github.workspace }}/.fleet/cache/cargo-target
+        RUSTUP_HOME: ${{ github.workspace }}/.fleet/cache/rustup
+        GOPATH: ${{ github.workspace }}/.fleet/cache/go
+        GOMODCACHE: ${{ github.workspace }}/.fleet/cache/go/pkg/mod
+        GOCACHE: ${{ github.workspace }}/.fleet/cache/go/build
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config --global --add safe.directory '*'
+        mkdir -p "$FLEET_OUTPUT_DIR"
+        cd "$GITHUB_WORKSPACE/target"
+        echo "Fleet dispatch: ${FLEET_DISPATCH_ID:-manual}"
+        echo "Target HEAD: $(git rev-parse HEAD)"
+        bash -euo pipefail -c "$FLEET_RUN_COMMAND"
+
+    - name: Upload reusable Fleet output
+      if: ${{ always() && hashFiles('target/fleet-output/**') != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: fleet-output
+        path: target/fleet-output/
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Push Nix result to the shared Fleet cache
+      if: ${{ success() && inputs.push_nix_cache == 'true' }}
+      env:
+        NIX_CACHE_SIGNING_KEY: ${{ inputs.nix_cache_signing_key }}
+        NIX_CACHE_UPLOAD_URL: ${{ inputs.nix_cache_upload_url }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -z "$NIX_CACHE_SIGNING_KEY" ] || [ -z "$NIX_CACHE_UPLOAD_URL" ]; then
+          echo "::notice::cache push requested but signing/upload secrets are not configured; skipping"
+          exit 0
+        fi
+        cd "$GITHUB_WORKSPACE/target"
+        if [ ! -e ./result ]; then
+          echo "::notice::no ./result symlink; nothing to push"
+          exit 0
+        fi
+        out="$(cd -P ./result && pwd)"
+        keyfile="$(mktemp)"
+        chmod 600 "$keyfile"
+        trap 'rm -f "$keyfile"' EXIT
+        printf '%s' "$NIX_CACHE_SIGNING_KEY" > "$keyfile"
+        nix path-info --recursive "$out" | nix store sign --key-file "$keyfile" --stdin
+        nix copy --to "$NIX_CACHE_UPLOAD_URL" "$out"
+        echo "pushed $out to the shared Fleet R2 cache"
