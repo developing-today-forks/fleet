@@ -73,7 +73,14 @@ jobs:
     runs-on: ubuntu-24.04
     # The published fleet build image: pinned toolchain and baked cache
     # configuration, the same image fleet-run legs use.
-    container: ghcr.io/developing-today/fleet-build:full
+    container:
+      image: ghcr.io/developing-today/fleet-build:full
+      # The image's default user is vscode (uid 1000), which cannot
+      # write the runner's _temp file-command directory — the first
+      # live session died in actions/checkout's post-step with
+      # EACCES on save_state (run 45282914944, code#13774). Job
+      # steps run as root inside the throwaway container instead.
+      options: --user root
     timeout-minutes: 150
     steps:
       - name: Checkout this repo (for the local composite action)
