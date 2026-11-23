@@ -239,6 +239,17 @@ runs:
         set -euo pipefail
         git config --global --add safe.directory '*'
         mkdir -p "$FLEET_OUTPUT_DIR"
+        # Let a privilege-dropping command (runuser -u vscode)
+        # append to this step's runner-owned file-command files
+        # ($GITHUB_STEP_SUMMARY et al.) instead of dying with
+        # EACCES (code#13537). The files are per-step, so this
+        # cannot live in the prep step above.
+        file_commands="$GITHUB_WORKSPACE/.github/scripts/fleet-file-commands.sh"
+        if [ -f "$file_commands" ]; then
+          bash "$file_commands"
+        else
+          echo "::warning::fleet-file-commands.sh not found in the runner repo checkout; file-command files stay runner-owned"
+        fi
         cd "$GITHUB_WORKSPACE/target"
         echo "Fleet dispatch: ${FLEET_DISPATCH_ID:-manual}"
         echo "Target HEAD: $(git rev-parse HEAD)"

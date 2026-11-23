@@ -500,6 +500,12 @@ jobs:
           FLEET_RUN_COMMAND: ${{ matrix.command }}
         run: |
           git config --global --add safe.directory '*'
+          # Same file-command fix as the fleet-command action
+          # (code#13537): this step's runner-owned file-command
+          # files must be writable by a privilege-dropping command.
+          if [ -f "$GITHUB_WORKSPACE/.fleet-runner/.github/scripts/fleet-file-commands.sh" ]; then
+            bash "$GITHUB_WORKSPACE/.fleet-runner/.github/scripts/fleet-file-commands.sh"
+          fi
           cd "$GITHUB_WORKSPACE/target"
           echo "HEAD: $(git rev-parse HEAD)"
           bash -lc "$FLEET_RUN_COMMAND"
@@ -510,6 +516,12 @@ jobs:
           FLEET_RUN_COMMAND: ${{ matrix.command }}
         run: |
           git config --global --add safe.directory '*'
+          # Same file-command fix as the fleet-command action
+          # (code#13537): this step's runner-owned file-command
+          # files must be writable by a privilege-dropping command.
+          if [ -f "$GITHUB_WORKSPACE/.fleet-runner/.github/scripts/fleet-file-commands.sh" ]; then
+            bash "$GITHUB_WORKSPACE/.fleet-runner/.github/scripts/fleet-file-commands.sh"
+          fi
           cd "$GITHUB_WORKSPACE"
           echo "layout (command runs from the workspace root):"
           while read -r item; do

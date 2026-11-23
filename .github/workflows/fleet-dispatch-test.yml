@@ -161,6 +161,12 @@ jobs:
         shell: bash
         run: |
           set +e
+          # Same file-command fix as the fleet-command action
+          # (code#13537): job commands that drop privileges must
+          # be able to append to this step's file-command files.
+          if [ -f "$GITHUB_WORKSPACE/.github/scripts/fleet-file-commands.sh" ]; then
+            bash "$GITHUB_WORKSPACE/.github/scripts/fleet-file-commands.sh"
+          fi
           cd "$GITHUB_WORKSPACE/${{ steps.sub.outputs.path }}"
           echo "running job commands in $(pwd)" >> "$GITHUB_WORKSPACE/job-output.log"
           bash -l "$RUNNER_TEMP/job-commands.sh" 2>&1 | tee -a "$GITHUB_WORKSPACE/job-output.log"
