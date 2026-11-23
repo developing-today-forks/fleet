@@ -53,7 +53,10 @@
 set -euo pipefail
 
 log() { echo "[fleet-executor-prep] $*"; }
-fail() { echo "::error::[fleet-executor-prep] $*"; exit 1; }
+fail() {
+  echo "::error::[fleet-executor-prep] $*"
+  exit 1
+}
 
 if [ "$(uname -s)" != "Linux" ]; then
   log "non-Linux surface; nothing to prepare"
@@ -97,7 +100,7 @@ if want nix && command -v nix >/dev/null 2>&1; then
           'eval-cache = false' \
           'extra-substituters = https://nix-cache.developing-today.workers.dev https://developing-today.cachix.org' \
           'extra-trusted-public-keys = nix-cache-1:x/kKZuzyQI3L0/twmOp3w2U68F2ZgM3WnH3ERYKrwf8= developing-today.cachix.org-1:dfIGqIJODUw9V/O9yUrYP2d3tjJtk3SZTDxOBWn9vN4='
-      } >> /etc/nix/nix.conf
+      } >>/etc/nix/nix.conf
     else
       log "system nix.conf already sets build-users-group"
     fi
@@ -116,15 +119,15 @@ export CARGO_HOME="${CARGO_HOME:-/usr/local/cargo}"
 if want rust; then
   mkdir -p "$RUSTUP_HOME" "$CARGO_HOME/bin"
   case ":$PATH:" in
-    *":$CARGO_HOME/bin:"*) ;;
-    *) export PATH="$CARGO_HOME/bin:$PATH" ;;
+  *":$CARGO_HOME/bin:"*) ;;
+  *) export PATH="$CARGO_HOME/bin:$PATH" ;;
   esac
   if [ -n "${GITHUB_PATH:-}" ]; then
-    grep -qx "$CARGO_HOME/bin" "$GITHUB_PATH" 2>/dev/null || echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+    grep -qx "$CARGO_HOME/bin" "$GITHUB_PATH" 2>/dev/null || echo "$CARGO_HOME/bin" >>"$GITHUB_PATH"
   fi
   if [ -n "${GITHUB_ENV:-}" ]; then
-    grep -q '^RUSTUP_HOME=' "$GITHUB_ENV" 2>/dev/null || echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
-    grep -q '^CARGO_HOME=' "$GITHUB_ENV" 2>/dev/null || echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+    grep -q '^RUSTUP_HOME=' "$GITHUB_ENV" 2>/dev/null || echo "RUSTUP_HOME=$RUSTUP_HOME" >>"$GITHUB_ENV"
+    grep -q '^CARGO_HOME=' "$GITHUB_ENV" 2>/dev/null || echo "CARGO_HOME=$CARGO_HOME" >>"$GITHUB_ENV"
   fi
 
   if ! command -v cargo >/dev/null 2>&1; then
@@ -141,8 +144,8 @@ if want rust; then
     fi
     toolchain="${toolchain:-1.99.1}"
     log "no cargo on PATH — installing rustup + toolchain $toolchain into $RUSTUP_HOME / $CARGO_HOME"
-    curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile default --default-toolchain "$toolchain" \
-      || fail "rustup install failed"
+    curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile default --default-toolchain "$toolchain" ||
+      fail "rustup install failed"
   else
     log "cargo already present ($(command -v cargo))"
   fi
@@ -156,24 +159,24 @@ fi
 if want bun; then
   bun_home="${FLEET_BUN_HOME:-/usr/local/bun}"
   case ":$PATH:" in
-    *":$bun_home/bin:"*) ;;
-    *) export PATH="$bun_home/bin:$PATH" ;;
+  *":$bun_home/bin:"*) ;;
+  *) export PATH="$bun_home/bin:$PATH" ;;
   esac
   if [ -n "${GITHUB_PATH:-}" ]; then
-    grep -qx "$bun_home/bin" "$GITHUB_PATH" 2>/dev/null || echo "$bun_home/bin" >> "$GITHUB_PATH"
+    grep -qx "$bun_home/bin" "$GITHUB_PATH" 2>/dev/null || echo "$bun_home/bin" >>"$GITHUB_PATH"
   fi
   if ! command -v bun >/dev/null 2>&1; then
     bun_version="${FLEET_BUN_VERSION:-1.4.5}"
     case "$(uname -m)" in
-      x86_64) bun_asset="bun-linux-x64" ;;
-      aarch64|arm64) bun_asset="bun-linux-aarch64" ;;
-      *) fail "no bun asset mapping for architecture $(uname -m)" ;;
+    x86_64) bun_asset="bun-linux-x64" ;;
+    aarch64 | arm64) bun_asset="bun-linux-aarch64" ;;
+    *) fail "no bun asset mapping for architecture $(uname -m)" ;;
     esac
     log "no bun on PATH — installing bun $bun_version into $bun_home"
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${bun_version}/${bun_asset}.zip" -o "$tmp/bun.zip" \
-      || fail "bun download failed"
+    curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${bun_version}/${bun_asset}.zip" -o "$tmp/bun.zip" ||
+      fail "bun download failed"
     unzip -o -q "$tmp/bun.zip" -d "$tmp" || fail "bun unzip failed"
     mkdir -p "$bun_home/bin"
     install -m 0755 "$tmp/$bun_asset/bun" "$bun_home/bin/bun"
