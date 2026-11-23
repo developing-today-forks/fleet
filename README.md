@@ -14,28 +14,16 @@ this repo is the prebuild play.
 
 ## Submodules
 
-| Path | Repo |
-|---|---|
-| `code/` | developing-today/code |
-| `opencode/` | developing-today/opencode |
-| `openchamber/` | developing-today/openchamber |
-| `nix/` | dezren39/darwin-nix |
-| `zettel/` | developing-today/zettel |
-| `hatch/` | dezren39/hatch |
-| `hatch-personal/` | dezren39/hatch-personal (private) |
-| `cairn/` | dezren39/cairn (private) |
-| `dezren39-zettel/` | dezren39/zettel |
-| `org-readme/` | developing-today/.github (the org's profile Readme page) |
-| `zulip-archive/` | developing-today/zulip-archive |
-| `hardware-doc/` | developing-today/hardware-doc |
+The umbrella records 22 submodule pins. [FLEET.md](FLEET.md) lists every
+path, repository and management tier. Each pin is a Git commit recorded
+in the umbrella tree.
 
-Ten are public, so clones inside a codespace need no extra auth.
-`hatch-personal` and `cairn` are private: the umbrella records only
-their SHAs, and their init in postCreate is best-effort — they clone
-only when the codespace was granted access to them. The devcontainer
-requests write permission for the original seven repos at codespace
-creation (approve the prompt) so pushes from inside work; extending
-those grants to the new public members is a follow-up decision.
+The [devcontainer](.devcontainer/devcontainer.json) initializes ten paths
+during prebuilds and attempts `hatch-personal` and `cairn` separately when
+access is available. It requests write permissions for eleven repositories
+at Codespace creation. Membership, automatic checkout and permission to
+push are separate decisions. Run `git submodule update --init -- <path>`
+when you need another authorized member.
 
 ## Working in it
 

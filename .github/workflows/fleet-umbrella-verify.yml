@@ -20,10 +20,9 @@ name: fleet umbrella verification
 # no credential available to this repo can read them — the same
 # posture as the umbrella's own best-effort private init. The plan
 # job verifies their pins are recorded and reports them as
-# recorded-only; every other member is fetch-verified. If the
-# umbrella gains or loses a member, the plan job fails loudly
-# until this file's RECORDED_ONLY list is reconciled — a member is
-# never silently dropped from verification.
+# recorded-only; every other member is fetch-verified. All declared paths must have a gitlink and every gitlink needs a
+# declaration. Adding or removing a recorded-only member also requires
+# updating the list below.
 #
 # Why this exists: docs/execution-surfaces.md. Scheduled health
 # checks are GitHub Actions work, and this is the recurring job
@@ -63,27 +62,7 @@ jobs:
           # verified as recorded; see the header comment.
           recorded_only='["dezren39/cairn", "dezren39/hatch-personal"]'
 
-          # path -> slug from .gitmodules, path -> sha from the tree.
-          subs=$(git config -f .gitmodules --get-regexp 'submodule\..*\.url' | while read -r key url; do
-            name=${key#submodule.}; name=${name%.url}
-            path=$(git config -f .gitmodules --get "submodule.$name.path")
-            slug=${url#https://github.com/}; slug=${slug%.git}
-            jq -cn --arg path "$path" --arg slug "$slug" '{path: $path, slug: $slug}'
-          done | jq -s '.')
-
-          pins=$(git ls-tree HEAD | awk '$2 == "commit" {print $3, $4}' | while read -r sha path; do
-            jq -cn --arg path "$path" --arg sha "$sha" '{path: $path, sha: $sha}'
-          done | jq -s '.')
-
-          members=$(jq -c -n --argjson subs "$subs" --argjson pins "$pins" '
-            [$subs[] | . + {sha: (.path as $p | $pins[] | select(.path == $p) | .sha)}]')
-
-          count=$(jq 'length' <<<"$members")
-          [ "$count" -ge 1 ] || { echo "::error::no submodule members found"; exit 1; }
-          if jq -e 'any(.[]; (.sha | type) != "string" or (.sha | length) != 40)' <<<"$members" >/dev/null; then
-            echo "::error::a submodule has no recorded pin in the tree"
-            exit 1
-          fi
+          members=$(python3 .github/scripts/umbrella-pins.py)
 
           legs=$(jq -c --argjson skip "$recorded_only" '
             [ .[] | select(.slug as $s | ($skip | index($s)) | not)
