@@ -180,6 +180,10 @@ if want bun; then
     unzip -o -q "$tmp/bun.zip" -d "$tmp" || fail "bun unzip failed"
     mkdir -p "$bun_home/bin"
     install -m 0755 "$tmp/$bun_asset/bun" "$bun_home/bin/bun"
+    # The release zip ships bun alone; bunx is bun under a second
+    # name (argv[0] dispatch), linked the way the official
+    # installer sets it up.
+    ln -sf "$bun_home/bin/bun" "$bun_home/bin/bunx"
     rm -rf "$tmp"
     trap - EXIT
   else
@@ -187,6 +191,17 @@ if want bun; then
   fi
   command -v bun >/dev/null 2>&1 || fail "bun still not resolvable after prep"
   log "bun: $(bun --version)"
+  if ! command -v bunx >/dev/null 2>&1; then
+    # Images baked before the Containerfile installed bunx ship bun
+    # alone, and dispatched JS verification calls bunx directly
+    # (code#13189). bunx is bun dispatched on argv[0], so a shim
+    # beside the resolved bun is the whole fix.
+    mkdir -p "$bun_home/bin"
+    ln -sf "$(command -v bun)" "$bun_home/bin/bunx"
+    log "bunx missing - shimmed to $(command -v bun) in $bun_home/bin"
+  fi
+  command -v bunx >/dev/null 2>&1 || fail "bunx still not resolvable after prep"
+  log "bunx: $(bunx --version)"
 fi
 
 log "executor environment ready"

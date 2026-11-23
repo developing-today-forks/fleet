@@ -120,10 +120,11 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path \
  && chmod -R a+rwX /usr/local/rustup /usr/local/cargo
 
 # Pinned bun, from the official release zip (the repos' TypeScript
-# packages test with bun; the image shipped none).
+# packages test with bun and bunx; the image shipped neither).
 RUN curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun.zip \
  && unzip -o -q /tmp/bun.zip -d /tmp/bun \
  && install -m 0755 /tmp/bun/bun-linux-x64/bun /usr/local/bin/bun \
+ && ln -s bun /usr/local/bin/bunx \
  && rm -rf /tmp/bun /tmp/bun.zip
 ENV PATH="/usr/local/cargo/bin:/home/vscode/.nix-profile/bin:/usr/local/go/bin:${PATH}"
 USER vscode
