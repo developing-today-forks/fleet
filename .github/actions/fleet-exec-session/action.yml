@@ -1,0 +1,176 @@
+name: Fleet exec session
+description: Run a live, short-lived fleet actions-exec session agent inside this job — the runner-side half of `fleet actions exec` (developing-today/code#13774). The agent dials out to the coordinator, proves it is inside this run with the job's GitHub OIDC token, and execs commands handed to it by the requesting seat. No connection material is ever printed — the session handle is a public identifier and the OIDC token is fetched from the Actions runtime and presented only to the broker.
+inputs:
+  handle:
+    description: "Session handle issued by the coordinator / `fleet actions exec start`. Public identifier, safe in logs."
+    required: true
+  broker_url:
+    description: "Base URL of the public broker door serving the actions-exec verbs (https)."
+    required: true
+  lease_seconds:
+    description: "Initial session lease in seconds. The agent dies at lease expiry unless the seat renews."
+    required: true
+  max_seconds:
+    description: "Hard session lifespan cap in seconds (<= 7200). Renewals cannot pass it; past it needs an approved emergency extension."
+    required: true
+  hide_logs:
+    description: "When true, the agent does not echo session IO to this job's log; IO returns only through the broker."
+    required: false
+    default: "false"
+  repo:
+    description: "Optional target owner/repository to check out as the session working directory."
+    required: false
+    default: ""
+  ref:
+    description: "Branch, tag, or commit for the target checkout; blank uses the target default branch."
+    required: false
+    default: ""
+  checkout_token:
+    description: "Token able to read the target repo (the fleet GHCR_ORG_PAT pattern). Required when repo is set."
+    required: false
+    default: ""
+  agent_ref:
+    description: "developing-today/code ref to build the fleet binary (agent) from, in the runner. Blank uses the pinned fleet-static release via the repo bootstrap pin."
+    required: false
+    default: ""
+  r2_access_key_id:
+    description: "R2 S3 access key id for `fleet-exec-put` egress. Blank skips the R2 leg quietly."
+    required: false
+    default: ""
+  r2_secret_access_key:
+    description: "R2 S3 secret access key for `fleet-exec-put` egress. Never echoed."
+    required: false
+    default: ""
+  r2_endpoint:
+    description: "R2 S3 endpoint URL for `fleet-exec-put` egress."
+    required: false
+    default: ""
+  r2_bucket:
+    description: "R2 bucket for `fleet-exec-put` egress."
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Validate session inputs
+      shell: bash
+      env:
+        HANDLE: ${{ inputs.handle }}
+        BROKER_URL: ${{ inputs.broker_url }}
+        LEASE_SECONDS: ${{ inputs.lease_seconds }}
+        MAX_SECONDS: ${{ inputs.max_seconds }}
+        TARGET_REPO: ${{ inputs.repo }}
+        CHECKOUT_TOKEN: <redacted>
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::$1"; exit 1; }
+        [[ "$HANDLE" =~ ^[A-Za-z0-9_-]{8,64}$ ]] || fail "handle must be 8-64 chars of [A-Za-z0-9_-]"
+        [[ "$BROKER_URL" =~ ^https:// ]] || fail "broker_url must be an https URL"
+        [[ "$LEASE_SECONDS" =~ ^[0-9]+$ ]] || fail "lease_seconds must be numeric"
+        [[ "$MAX_SECONDS" =~ ^[0-9]+$ ]] || fail "max_seconds must be numeric"
+        [ "$LEASE_SECONDS" -ge 30 ] || fail "lease_seconds must be at least 30"
+        [ "$MAX_SECONDS" -le 7200 ] || fail "max_seconds must not exceed 7200 (the fleet leg cap)"
+        [ "$LEASE_SECONDS" -le "$MAX_SECONDS" ] || fail "lease_seconds must not exceed max_seconds"
+        if [ -n "$TARGET_REPO" ]; then
+          [[ "$TARGET_REPO" =~ ^(dezren39|developing-today|developing-today-forks)/[A-Za-z0-9._-]+$ ]] \
+            || fail "repo must be owner/repository under a configured Fleet owner"
+          [ -n "$CHECKOUT_TOKEN" ] || fail "checkout_token is required when repo is set"
+        fi
+        echo "fleet-exec session $HANDLE: lease ${LEASE_SECONDS}s, max ${MAX_SECONDS}s, hide_logs=${{ inputs.hide_logs }}"
+
+    - name: Checkout target repo (session working directory)
+      if: ${{ inputs.repo != '' }}
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.repo }}
+        ref: ${{ inputs.ref }}
+        token: <redacted>
+        path: .fleet-exec-work
+        fetch-depth: 1
+
+    - name: Checkout code for the agent build
+      if: ${{ inputs.agent_ref != '' }}
+      uses: actions/checkout@v4
+      with:
+        repository: developing-today/code
+        ref: ${{ inputs.agent_ref }}
+        token: <redacted>
+        path: .fleet-src
+        fetch-depth: 1
+
+    - name: Build the fleet binary (agent) from the code ref
+      if: ${{ inputs.agent_ref != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/fleet-bin"
+        cargo build --release -p fleet --manifest-path .fleet-src/pkgs/fleet/Cargo.toml
+        install -m 0755 .fleet-src/pkgs/fleet/target/release/fleet "$RUNNER_TEMP/fleet-bin/fleet"
+        "$RUNNER_TEMP/fleet-bin/fleet" version
+
+    - name: Install the pinned fleet binary (agent) from the bootstrap pin
+      if: ${{ inputs.agent_ref == '' }}
+      shell: bash
+      env:
+        GH_TOKEN: <redacted>
+      run: |
+        set -euo pipefail
+        # The bootstrap script pins the release URL + SHA-256 and installs
+        # to ~/tools/fleet; it is the estate's verified distribution route.
+        mkdir -p "$RUNNER_TEMP/fleet-bootstrap"
+        gh api repos/developing-today/code/contents/scripts/muse/bootstrap.sh \
+          --jq '.content' | base64 -d > "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
+        bash "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
+        mkdir -p "$RUNNER_TEMP/fleet-bin"
+        install -m 0755 ~/tools/fleet "$RUNNER_TEMP/fleet-bin/fleet"
+        "$RUNNER_TEMP/fleet-bin/fleet" version
+
+    - name: Gate on the actions domain
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! "$RUNNER_TEMP/fleet-bin/fleet" capabilities | grep -q '"actions"'; then
+          echo "::error::this fleet binary has no actions domain; the actions-exec agent is not in this build (see developing-today/code#13774)"
+          exit 1
+        fi
+
+    - name: Run the session agent
+      shell: bash
+      env:
+        FLEET_EXEC_R2_ACCESS_KEY_ID: ${{ inputs.r2_access_key_id }}
+        FLEET_EXEC_R2_SECRET_ACCESS_KEY: ${{ inputs.r2_secret_access_key }}
+        FLEET_EXEC_R2_ENDPOINT: ${{ inputs.r2_endpoint }}
+        FLEET_EXEC_R2_BUCKET: ${{ inputs.r2_bucket }}
+      run: |
+        set -euo pipefail
+        workdir="$GITHUB_WORKSPACE"
+        if [ -n "${{ inputs.repo }}" ]; then
+          workdir="$GITHUB_WORKSPACE/.fleet-exec-work"
+        fi
+        outbox="$RUNNER_TEMP/fleet-exec-out"
+        mkdir -p "$outbox"
+        echo "FLEET_EXEC_OUTBOX=$outbox" >> "$GITHUB_ENV"
+        hide=""
+        if [ "${{ inputs.hide_logs }}" = "true" ]; then hide="--hide-logs"; fi
+        # The agent fetches the job OIDC token from the Actions runtime
+        # (ACTIONS_ID_TOKEN_REQUEST_* are injected because the workflow
+        # grants id-token: write) and presents it only to the broker.
+        # It writes the fleet-exec-put egress helper into the session
+        # bin dir on start; the workflow step's PATH picks it up for
+        # commands the seat runs through the session.
+        exec "$RUNNER_TEMP/fleet-bin/fleet" actions agent \
+          --handle "${{ inputs.handle }}" \
+          --broker-url "${{ inputs.broker_url }}" \
+          --lease-seconds "${{ inputs.lease_seconds }}" \
+          --max-seconds "${{ inputs.max_seconds }}" \
+          --workdir "$workdir" \
+          --outbox "$outbox" \
+          $hide
+
+    - name: Upload session outbox as a workflow artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fleet-exec-out-${{ inputs.handle }}
+        path: ${{ runner.temp }}/fleet-exec-out
+        if-no-files-found: ignore

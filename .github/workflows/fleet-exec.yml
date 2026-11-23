@@ -1,0 +1,103 @@
+name: fleet-exec
+run-name: "Fleet exec session ${{ inputs.handle }}"
+
+# Live, short-lived exec session inside a runner — the workflow half of
+# `fleet actions exec` (developing-today/code#13774). A requesting seat
+# asks the central coordinator for a session, dispatches this workflow
+# with the session handle, and the runner-side agent (the
+# fleet-exec-session composite action) dials out to the coordinator and
+# execs the seat's commands until the lease ends.
+#
+# Nothing connection-shaped is printed by this workflow or the action:
+# the handle is a public identifier, and the agent authenticates to the
+# broker with the job's GitHub OIDC token, fetched from the Actions
+# runtime and never logged. Inputs carry no secrets (dispatch inputs
+# are visible on the run page); real secrets arrive only as masked
+# repository secrets below.
+#
+# Guardrails are structural, as with fleet-run: workflow_dispatch only
+# (dispatching requires write access to this repo), the target repo is
+# restricted to the fleet owners by the action's validation step, the
+# job timeout is a hard backstop (150 minutes) and the agent enforces
+# the much shorter lease/max inside it.
+on:
+  workflow_dispatch:
+    inputs:
+      handle:
+        description: "Session handle issued by the coordinator / fleet actions exec start"
+        type: string
+        required: true
+      broker_url:
+        description: "Base URL of the public broker door serving the actions-exec verbs"
+        type: string
+        required: true
+      repo:
+        description: "Optional target owner/repository to check out as the session working directory"
+        type: string
+        required: false
+        default: ""
+      ref:
+        description: "Branch, tag, or commit; blank uses the target default branch"
+        type: string
+        required: false
+        default: ""
+      lease_seconds:
+        description: "Initial session lease in seconds (agent dies at expiry unless renewed)"
+        type: string
+        required: false
+        default: "900"
+      max_seconds:
+        description: "Hard session lifespan cap in seconds (<= 7200)"
+        type: string
+        required: false
+        default: "1800"
+      hide_logs:
+        description: "Hide session IO from this run's logs (IO returns only through the broker)"
+        type: choice
+        required: false
+        default: "false"
+        options: ["false", "true"]
+      agent_ref:
+        description: "developing-today/code ref to build the agent from; blank uses the pinned fleet-static release"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  id-token: write # the agent's OIDC proof to the broker
+  contents: read
+
+jobs:
+  session:
+    name: exec session
+    runs-on: ubuntu-24.04
+    # The published fleet build image: pinned toolchain and baked cache
+    # configuration, the same image fleet-run legs use.
+    container: ghcr.io/developing-today/fleet-build:full
+    timeout-minutes: 150
+    steps:
+      - name: Checkout this repo (for the local composite action)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/fleet-exec-session
+          path: .fleet-self
+
+      - name: Run the exec session
+        uses: ./.fleet-self/.github/actions/fleet-exec-session
+        with:
+          handle: ${{ inputs.handle }}
+          broker_url: ${{ inputs.broker_url }}
+          lease_seconds: ${{ inputs.lease_seconds }}
+          max_seconds: ${{ inputs.max_seconds }}
+          hide_logs: ${{ inputs.hide_logs }}
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          checkout_token: <redacted>
+          agent_ref: ${{ inputs.agent_ref }}
+          # R2 egress credentials for fleet-exec-put. Absent secrets
+          # arrive empty and the R2 leg skips quietly (the fleet-run
+          # cache pattern); the artifact leg always works.
+          r2_access_key_id: ${{ secrets.FLEET_EXEC_R2_ACCESS_KEY_ID }}
+          r2_secret_access_key: ${{ secrets.FLEET_EXEC_R2_SECRET_ACCESS_KEY }}
+          r2_endpoint: ${{ secrets.FLEET_EXEC_R2_ENDPOINT }}
+          r2_bucket: ${{ secrets.FLEET_EXEC_R2_BUCKET }}
