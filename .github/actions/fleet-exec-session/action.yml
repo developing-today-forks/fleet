@@ -125,7 +125,7 @@ runs:
           -H "Accept: application/vnd.github.raw" \
           https://api.github.com/repos/developing-today/code/contents/scripts/muse/bootstrap.sh \
           -o "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
-        bash "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
+        bash "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh" --only tools,fleet
         mkdir -p "$RUNNER_TEMP/fleet-bin"
         install -m 0755 ~/tools/fleet "$RUNNER_TEMP/fleet-bin/fleet"
         "$RUNNER_TEMP/fleet-bin/fleet" version
