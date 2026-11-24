@@ -19,11 +19,11 @@ git commit --quiet -m matched
 python3 "$planner" | jq -e --arg pin "$pin" '. == [{path:"nested/private member",slug:"example/recorded-only",sha:$pin}]'
 
 expect_failure() {
-    if python3 "$planner" >result 2>reason; then
-        echo "unexpectedly accepted $1" >&2
-        exit 1
-    fi
-    grep -F "$1" reason
+  if python3 "$planner" >result 2>reason; then
+    echo "unexpectedly accepted $1" >&2
+    exit 1
+  fi
+  grep -F "$1" reason
 }
 
 git config -f .gitmodules submodule.missing.path missing
