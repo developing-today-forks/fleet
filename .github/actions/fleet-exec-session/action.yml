@@ -118,8 +118,13 @@ runs:
         # The bootstrap script pins the release URL + SHA-256 and installs
         # to ~/tools/fleet; it is the estate's verified distribution route.
         mkdir -p "$RUNNER_TEMP/fleet-bootstrap"
-        gh api repos/developing-today/code/contents/scripts/muse/bootstrap.sh \
-          --jq '.content' | base64 -d > "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
+        # Fetch with curl, not gh: this step runs inside the fleet-build
+        # container, which bakes in curl but not the gh CLI (code#13774).
+        curl -fsSL \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github.raw" \
+          https://api.github.com/repos/developing-today/code/contents/scripts/muse/bootstrap.sh \
+          -o "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
         bash "$RUNNER_TEMP/fleet-bootstrap/bootstrap.sh"
         mkdir -p "$RUNNER_TEMP/fleet-bin"
         install -m 0755 ~/tools/fleet "$RUNNER_TEMP/fleet-bin/fleet"
