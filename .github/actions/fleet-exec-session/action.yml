@@ -112,7 +112,7 @@ runs:
       if: ${{ inputs.agent_ref == '' }}
       shell: bash
       env:
-        GH_TOKEN: <redacted>
+        GH_TOKEN: ${{ inputs.checkout_token }}
       run: |
         set -euo pipefail
         # The bootstrap script pins the release URL + SHA-256 and installs
