@@ -99,7 +99,7 @@ jobs:
           hide_logs: ${{ inputs.hide_logs }}
           repo: ${{ inputs.repo }}
           ref: ${{ inputs.ref }}
-          checkout_token: <redacted>
+          checkout_token: ${{ github.token }}
           agent_ref: ${{ inputs.agent_ref }}
           # R2 egress credentials for fleet-exec-put. Absent secrets
           # arrive empty and the R2 leg skips quietly (the fleet-run

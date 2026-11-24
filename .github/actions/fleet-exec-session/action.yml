@@ -60,7 +60,7 @@ runs:
         LEASE_SECONDS: ${{ inputs.lease_seconds }}
         MAX_SECONDS: ${{ inputs.max_seconds }}
         TARGET_REPO: ${{ inputs.repo }}
-        CHECKOUT_TOKEN: <redacted>
+        CHECKOUT_TOKEN: ${{ inputs.checkout_token }}
       run: |
         set -euo pipefail
         fail() { echo "::error::$1"; exit 1; }
@@ -84,7 +84,7 @@ runs:
       with:
         repository: ${{ inputs.repo }}
         ref: ${{ inputs.ref }}
-        token: <redacted>
+        token: ${{ inputs.checkout_token }}
         path: .fleet-exec-work
         fetch-depth: 1
 
@@ -94,7 +94,7 @@ runs:
       with:
         repository: developing-today/code
         ref: ${{ inputs.agent_ref }}
-        token: <redacted>
+        token: ${{ inputs.checkout_token }}
         path: .fleet-src
         fetch-depth: 1
 
