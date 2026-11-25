@@ -130,17 +130,35 @@ if want rust; then
     grep -q '^CARGO_HOME=' "$GITHUB_ENV" 2>/dev/null || echo "CARGO_HOME=$CARGO_HOME" >>"$GITHUB_ENV"
   fi
 
+  # Discover the target repo's rust-toolchain.toml pins (fleet#119):
+  # the root file plus the per-package pins this fleet's repos carry
+  # (pkgs/id, pkgs/fleet). pin_channels/pin_dirs are parallel arrays
+  # of the distinct channels in probe order and the directory each
+  # was found in (the install below runs from that directory so the
+  # file's components list applies).
+  pin_channels=()
+  pin_dirs=()
+  if [ -n "${FLEET_TARGET_DIR:-}" ]; then
+    for f in "$FLEET_TARGET_DIR/rust-toolchain.toml" "$FLEET_TARGET_DIR/pkgs/id/rust-toolchain.toml" "$FLEET_TARGET_DIR/pkgs/fleet/rust-toolchain.toml"; do
+      [ -f "$f" ] || continue
+      ch="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)"
+      [ -n "$ch" ] || continue
+      seen=0
+      if [ "${#pin_channels[@]}" -gt 0 ]; then
+        for have in "${pin_channels[@]}"; do
+          [ "$have" = "$ch" ] && seen=1
+        done
+      fi
+      [ "$seen" = 1 ] && continue
+      pin_channels+=("$ch")
+      pin_dirs+=("$(dirname "$f")")
+    done
+  fi
+
   if ! command -v cargo >/dev/null 2>&1; then
     toolchain="${FLEET_RUST_TOOLCHAIN:-}"
-    if [ -z "$toolchain" ] && [ -n "${FLEET_TARGET_DIR:-}" ]; then
-      # The fleet-wide pin lives in the target repo's
-      # rust-toolchain.toml (code: 1.99.1 at root, pkgs/id, pkgs/fleet).
-      for f in "$FLEET_TARGET_DIR/rust-toolchain.toml" "$FLEET_TARGET_DIR/pkgs/fleet/rust-toolchain.toml"; do
-        if [ -f "$f" ]; then
-          toolchain="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)"
-          [ -n "$toolchain" ] && break
-        fi
-      done
+    if [ -z "$toolchain" ] && [ "${#pin_channels[@]}" -gt 0 ]; then
+      toolchain="${pin_channels[0]}"
     fi
     toolchain="${toolchain:-1.99.1}"
     log "no cargo on PATH — installing rustup + toolchain $toolchain into $RUSTUP_HOME / $CARGO_HOME"
@@ -149,9 +167,68 @@ if want rust; then
   else
     log "cargo already present ($(command -v cargo))"
   fi
-  # Per-repo rust-toolchain.toml pins are honoured by the rustup
-  # shims themselves (auto-install on first use inside the repo).
+
+  # Honour the pins (fleet#119). The fleet-command cache restores a
+  # RUSTUP_HOME that can carry the rustup shims with the pinned
+  # toolchain missing and no default configured: cargo then errors
+  # "one wasn't specified explicitly, and no default is configured"
+  # in any directory without a toolchain file in scope (this prep
+  # step runs from the workspace root, outside the target checkout),
+  # and a dispatched command that resolves some other toolchain
+  # reports that toolchain's signal instead of the repo's (clippy
+  # 1.99.0 flagging pre-existing lints against a 1.99.1 pin). So:
+  # install every distinct pin that is missing, and when rustup
+  # has no default configured, set the first pin as the default.
+  # An existing default and installed pins are left alone, so the
+  # baked image stays a no-op.
+  if command -v rustup >/dev/null 2>&1; then
+    reconcile_channels=()
+    reconcile_dirs=()
+    if [ -n "${FLEET_RUST_TOOLCHAIN:-}" ]; then
+      reconcile_channels+=("$FLEET_RUST_TOOLCHAIN")
+      reconcile_dirs+=("")
+    elif [ "${#pin_channels[@]}" -gt 0 ]; then
+      reconcile_channels=("${pin_channels[@]}")
+      reconcile_dirs=("${pin_dirs[@]}")
+    fi
+    if [ "${#reconcile_channels[@]}" -gt 0 ]; then
+      for i in "${!reconcile_channels[@]}"; do
+        ch="${reconcile_channels[$i]}"
+        installed=0
+        if [ -d "$RUSTUP_HOME/toolchains" ]; then
+          for d in "$RUSTUP_HOME/toolchains"/*/; do
+            [ -d "$d" ] || continue
+            case "$(basename "$d")" in
+            "$ch" | "$ch"-*) installed=1 ;;
+            esac
+          done
+        fi
+        if [ "$installed" = 0 ]; then
+          log "pinned toolchain $ch not installed — installing it (fleet#119)"
+          if [ -n "${reconcile_dirs[$i]}" ]; then
+            (cd "${reconcile_dirs[$i]}" && rustup toolchain install "$ch") ||
+              fail "installing pinned toolchain $ch failed"
+          else
+            rustup toolchain install "$ch" ||
+              fail "installing pinned toolchain $ch failed"
+          fi
+        fi
+      done
+      if [ -z "$(rustup default 2>/dev/null || true)" ]; then
+        log "no rustup default configured — setting ${reconcile_channels[0]}, the target repo's pin (fleet#119)"
+        rustup default "${reconcile_channels[0]}" ||
+          fail "setting the rustup default failed"
+      fi
+    fi
+  fi
+
   command -v cargo >/dev/null 2>&1 || fail "cargo still not resolvable after prep"
+  if command -v rustup >/dev/null 2>&1; then
+    # A cargo shim that cannot run is the fleet#119 failure mode;
+    # fail here instead of handing the command a broken toolchain.
+    cargo --version >/dev/null 2>&1 ||
+      fail "cargo resolves through rustup but cannot run (no usable toolchain) — see fleet#119"
+  fi
   log "rust: $(cargo --version), $(rustc --version)"
 fi
 
