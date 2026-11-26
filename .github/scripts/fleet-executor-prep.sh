@@ -38,7 +38,7 @@
 # runner machinery's scratch home.
 #
 # Knobs (environment):
-#   FLEET_PREP_SKIP        comma list of sections to skip: nix,rust,bun
+#   FLEET_PREP_SKIP        comma list of sections to skip: nix,rust,bun,cargotarget
 #   RUSTUP_HOME/CARGO_HOME toolchain locations (defaults below)
 #   FLEET_RUST_TOOLCHAIN   default toolchain override
 #   FLEET_TARGET_DIR       target checkout used to discover a
@@ -279,6 +279,67 @@ if want bun; then
   fi
   command -v bunx >/dev/null 2>&1 || fail "bunx still not resolvable after prep"
   log "bunx: $(bunx --version)"
+fi
+
+# -------------------------------------------------------- cargo target
+# The fleet-command action restores .fleet/cache/cargo-target from
+# the shared actions/cache and points CARGO_TARGET_DIR at it. A
+# restored target dir can carry build-script artifacts produced by
+# a different toolchain than the one this run uses (the cache
+# crosses refs and commands; the run that saved it may have built
+# with a Nix dev-shell cargo while this run uses the rustup cargo,
+# or vice versa). Library artifacts survive the mismatch — rustc
+# only reads them — but a build-script binary is EXECUTED, and
+# cargo re-executes the restored binary on fingerprint trust
+# alone. If the binary is absent while its fingerprint is fresh,
+# or its ELF interpreter was baked in by a toolchain whose loader
+# path does not exist in this image, the exec fails with "No such
+# file or directory (os error 2)" before any test runs
+# (dezren39/fleet#111: ring v0.17.14, runs 45249821636 /
+# 45255497015; aws-lc-sys, run 45611503717).
+#
+# Build scripts are small and quick to rebuild, so never trust a
+# restored one: invalidate every build-script unit in the restored
+# target dir — compile and run fingerprints, the build/ output
+# dir that holds the binary, and the deps/ binary — and let cargo
+# rebuild just those units with the live toolchain. Everything
+# else in the target dir stays warm.
+if want cargotarget; then
+  if [ -n "${CARGO_TARGET_DIR:-}" ] && [ -d "$CARGO_TARGET_DIR" ]; then
+    swept=0
+    while IFS= read -r -d '' fp_root; do
+      profile_dir="$(dirname "$fp_root")"
+      for unit in "$fp_root"/*/; do
+        [ -d "$unit" ] || continue
+        # Build-script units are the fingerprint dirs whose recorded
+        # unit files mention build-script (the compile unit records
+        # build-script-build-script-build, the run unit records
+        # run-build-script-build-script-build; older cargo used
+        # custom-build for the run unit). Lib/bin/test units record
+        # lib-*, bin-*, dep-lib-* etc. and are left alone.
+        if [ -n "$(find "$unit" -maxdepth 1 \( -name '*build-script*' -o -name '*custom-build*' \) -print -quit 2>/dev/null)" ]; then
+          rm -rf "$unit" || log "warning: could not remove fingerprint dir $unit"
+          swept=$((swept + 1))
+        fi
+      done
+      # The compiled binary and the run outputs live in
+      # build/<pkg>-<hash>/ (the hash is the run unit's); drop every
+      # such dir that held a build script (a recorded output file,
+      # or a build-script-* binary — custom build-target names
+      # like aws-lc-sys's build-script-main included), plus the
+      # deps/ binaries.
+      for out_dir in "$profile_dir"/build/*/; do
+        [ -d "$out_dir" ] || continue
+        if [ -e "$out_dir/output" ] || [ -n "$(find "$out_dir" -maxdepth 1 -name 'build-script-*' -print -quit 2>/dev/null)" ]; then
+          rm -rf "$out_dir" || log "warning: could not remove build output dir $out_dir"
+        fi
+      done
+      rm -f "$profile_dir"/deps/build_script_build-* 2>/dev/null || true
+    done < <(find "$CARGO_TARGET_DIR" -maxdepth 3 -type d -name .fingerprint -print0 2>/dev/null)
+    log "cargo target: invalidated $swept restored build-script unit(s) under $CARGO_TARGET_DIR (fleet#111)"
+  else
+    log "cargo target: CARGO_TARGET_DIR unset or missing; nothing to sweep"
+  fi
 fi
 
 log "executor environment ready"
