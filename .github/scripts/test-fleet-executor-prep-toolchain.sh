@@ -9,6 +9,13 @@
 # the target checkout (root, pkgs/id, pkgs/fleet — duplicates
 # collapsed) and set the first pin as the rustup default when
 # none is configured, while leaving a warm home untouched.
+#
+# Scenarios 4–5 cover the pin-less target (dezren39/fleet#124): a
+# checkout in scope with no rust-toolchain.toml anywhere must not
+# fail closed on a cold cache — prep falls back to a default
+# toolchain (an already-installed one if the restored home has
+# one, else the script default) and configures it as the rustup
+# default.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -25,15 +32,19 @@ fail() {
 # CARGO_HOME/bin, an empty RUSTUP_HOME/toolchains, and a target
 # checkout whose three rust-toolchain.toml files pin 1.99.1
 # (root), 1.99.1 again (pkgs/id — a duplicate), and 1.85.0
-# (pkgs/fleet). The rustup stub records every call (with cwd) to
-# $RUSTUP_STUB_LOG and emulates installs/defaults on the fixture.
+# (pkgs/fleet). With $2 = pinless the target checkout is created
+# without any rust-toolchain.toml. The rustup stub records every
+# call (with cwd) to $RUSTUP_STUB_LOG and emulates
+# installs/defaults on the fixture.
 make_env() {
   local root="$1"
   mkdir -p "$root/rustup/toolchains" "$root/cargo/bin" \
     "$root/target/pkgs/id" "$root/target/pkgs/fleet"
-  printf '[toolchain]\nchannel = "1.99.1"\n' >"$root/target/rust-toolchain.toml"
-  printf '[toolchain]\nchannel = "1.99.1"\n' >"$root/target/pkgs/id/rust-toolchain.toml"
-  printf '[toolchain]\nchannel = "1.85.0"\n' >"$root/target/pkgs/fleet/rust-toolchain.toml"
+  if [ "${2:-}" != "pinless" ]; then
+    printf '[toolchain]\nchannel = "1.99.1"\n' >"$root/target/rust-toolchain.toml"
+    printf '[toolchain]\nchannel = "1.99.1"\n' >"$root/target/pkgs/id/rust-toolchain.toml"
+    printf '[toolchain]\nchannel = "1.85.0"\n' >"$root/target/pkgs/fleet/rust-toolchain.toml"
+  fi
 
   cat >"$root/cargo/bin/rustup" <<'STUB'
 #!/usr/bin/env bash
@@ -138,4 +149,45 @@ installs="$(count_calls '^rustup toolchain install ' "$s3/rustup-calls.log")"
 [ "$installs" = 0 ] ||
   fail "scenario 3: expected no installs without a target checkout, got $installs"
 
-echo "ok: prep installs the target repo's distinct toolchain pins and defaults to the first when unset"
+# --- Scenario 4: pin-less target, cold home — no pins anywhere,
+# no toolchains installed, no default configured. Prep must fall
+# back to the default toolchain instead of failing closed
+# (fleet#124): exactly one install (1.99.1), set as the default,
+# with the pin-less state reported plainly in the log.
+s4="$fixture/s4"
+make_env "$s4" pinless
+run_prep "$s4" || fail "scenario 4: prep exited non-zero: $(cat "$s4/prep.log")"
+
+installs="$(count_calls '^rustup toolchain install ' "$s4/rustup-calls.log")"
+[ "$installs" = 1 ] ||
+  fail "scenario 4: expected exactly 1 fallback install, got $installs: $(cat "$s4/rustup-calls.log")"
+grep -Fq "rustup toolchain install 1.99.1 " "$s4/rustup-calls.log" ||
+  fail "scenario 4: fallback toolchain 1.99.1 not installed: $(cat "$s4/rustup-calls.log")"
+[ "$(cat "$s4/rustup/stub-default")" = "1.99.1" ] ||
+  fail "scenario 4: default not set to the fallback (1.99.1): $(cat "$s4/rustup/stub-default" 2>/dev/null || echo '<unset>')"
+grep -Fq "no rust-toolchain pin found in the target repo — falling back to the default toolchain 1.99.1 (fleet#124)" "$s4/prep.log" ||
+  fail "scenario 4: prep did not report the pin-less fallback: $(cat "$s4/prep.log")"
+grep -Fq "no rustup default configured — setting 1.99.1, the pin-less fallback (fleet#124)" "$s4/prep.log" ||
+  fail "scenario 4: prep did not report setting the fallback default: $(cat "$s4/prep.log")"
+
+# --- Scenario 5: pin-less target, warm home — a toolchain is
+# already installed in the restored home but no default is
+# configured. Prep must not install anything; it adopts the
+# installed toolchain as the default (fleet#124).
+s5="$fixture/s5"
+make_env "$s5" pinless
+mkdir -p "$s5/rustup/toolchains/1.85.0-x86_64-unknown-linux-gnu"
+run_prep "$s5" || fail "scenario 5: prep exited non-zero: $(cat "$s5/prep.log")"
+
+installs="$(count_calls '^rustup toolchain install ' "$s5/rustup-calls.log")"
+[ "$installs" = 0 ] ||
+  fail "scenario 5: expected no installs when a toolchain is already installed, got $installs: $(cat "$s5/rustup-calls.log")"
+sets="$(count_calls '^rustup default-set ' "$s5/rustup-calls.log")"
+[ "$sets" = 1 ] ||
+  fail "scenario 5: expected exactly 1 default-set, got $sets: $(cat "$s5/rustup-calls.log")"
+[ "$(cat "$s5/rustup/stub-default")" = "1.85.0-x86_64-unknown-linux-gnu" ] ||
+  fail "scenario 5: default not set to the already-installed toolchain: $(cat "$s5/rustup/stub-default" 2>/dev/null || echo '<unset>')"
+grep -Fq "no rust-toolchain pin found in the target repo — using the already-installed toolchain 1.85.0-x86_64-unknown-linux-gnu as the default (fleet#124)" "$s5/prep.log" ||
+  fail "scenario 5: prep did not report adopting the installed toolchain: $(cat "$s5/prep.log")"
+
+echo "ok: prep installs the target repo's distinct toolchain pins, defaults to the first when unset, and falls back to a default toolchain for pin-less targets"

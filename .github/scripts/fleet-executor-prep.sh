@@ -180,16 +180,51 @@ if want rust; then
   # install every distinct pin that is missing, and when rustup
   # has no default configured, set the first pin as the default.
   # An existing default and installed pins are left alone, so the
-  # baked image stays a no-op.
+  # baked image stays a no-op. When a target checkout is in scope
+  # but carries no pin at all, a default toolchain is reconciled
+  # instead (fleet#124, below); with no target in scope nothing is
+  # reconciled.
   if command -v rustup >/dev/null 2>&1; then
     reconcile_channels=()
     reconcile_dirs=()
+    reconcile_kind="pinned"
     if [ -n "${FLEET_RUST_TOOLCHAIN:-}" ]; then
       reconcile_channels+=("$FLEET_RUST_TOOLCHAIN")
       reconcile_dirs+=("")
+      reconcile_kind="override"
     elif [ "${#pin_channels[@]}" -gt 0 ]; then
       reconcile_channels=("${pin_channels[@]}")
       reconcile_dirs=("${pin_dirs[@]}")
+    elif [ -n "${FLEET_TARGET_DIR:-}" ]; then
+      # Pin-less target (fleet#124): a checkout is in scope but no
+      # rust-toolchain.toml exists at the root or in the known
+      # subtrees. Failing closed here — the pre-#124 behaviour —
+      # means fleet-command can never run a command in such a repo
+      # on a cold cache: the restored RUSTUP_HOME is empty, the
+      # rustup shims resolve, and the fail-closed check at the end
+      # of this section stops the job (the fleet#122 proof hit
+      # exactly this dispatching at dezren39/fleet itself). Fall
+      # back to a default toolchain instead: one already installed
+      # in the restored home if there is one, else the script
+      # default (kept in step with the no-cargo install above).
+      # The pinned-but-unhonourable case above stays fail-closed.
+      reconcile_kind="default"
+      existing=""
+      if [ -d "$RUSTUP_HOME/toolchains" ]; then
+        for d in "$RUSTUP_HOME/toolchains"/*/; do
+          [ -d "$d" ] || continue
+          existing="$(basename "$d")"
+          break
+        done
+      fi
+      if [ -n "$existing" ]; then
+        log "no rust-toolchain pin found in the target repo — using the already-installed toolchain $existing as the default (fleet#124)"
+        reconcile_channels+=("$existing")
+      else
+        log "no rust-toolchain pin found in the target repo — falling back to the default toolchain 1.99.1 (fleet#124)"
+        reconcile_channels+=("1.99.1")
+      fi
+      reconcile_dirs+=("")
     fi
     if [ "${#reconcile_channels[@]}" -gt 0 ]; then
       for i in "${!reconcile_channels[@]}"; do
@@ -204,18 +239,22 @@ if want rust; then
           done
         fi
         if [ "$installed" = 0 ]; then
-          log "pinned toolchain $ch not installed — installing it (fleet#119)"
+          log "toolchain $ch ($reconcile_kind) not installed — installing it"
           if [ -n "${reconcile_dirs[$i]}" ]; then
             (cd "${reconcile_dirs[$i]}" && rustup toolchain install "$ch") ||
-              fail "installing pinned toolchain $ch failed"
+              fail "installing $reconcile_kind toolchain $ch failed"
           else
             rustup toolchain install "$ch" ||
-              fail "installing pinned toolchain $ch failed"
+              fail "installing $reconcile_kind toolchain $ch failed"
           fi
         fi
       done
       if [ -z "$(rustup default 2>/dev/null || true)" ]; then
-        log "no rustup default configured — setting ${reconcile_channels[0]}, the target repo's pin (fleet#119)"
+        if [ "$reconcile_kind" = "default" ]; then
+          log "no rustup default configured — setting ${reconcile_channels[0]}, the pin-less fallback (fleet#124)"
+        else
+          log "no rustup default configured — setting ${reconcile_channels[0]}, the target repo's pin (fleet#119)"
+        fi
         rustup default "${reconcile_channels[0]}" ||
           fail "setting the rustup default failed"
       fi
