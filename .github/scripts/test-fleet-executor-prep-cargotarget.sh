@@ -12,7 +12,10 @@ prep="$here/fleet-executor-prep.sh"
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
 expect_gone() { [ ! -e "$1" ] || fail "expected swept: $1"; }
 expect_kept() { [ -e "$1" ] || fail "expected kept: $1"; }
 

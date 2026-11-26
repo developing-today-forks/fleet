@@ -16,7 +16,10 @@ prep="$here/fleet-executor-prep.sh"
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
 
 # Build a stub toolchain home: cargo/rustc/rustup shims in
 # CARGO_HOME/bin, an empty RUSTUP_HOME/toolchains, and a target
