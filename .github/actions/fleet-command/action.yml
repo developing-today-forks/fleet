@@ -253,7 +253,44 @@ runs:
         cd "$GITHUB_WORKSPACE/target"
         echo "Fleet dispatch: ${FLEET_DISPATCH_ID:-manual}"
         echo "Target HEAD: $(git rev-parse HEAD)"
-        bash -euo pipefail -c "$FLEET_RUN_COMMAND"
+        # Tee the command's output to a file as it runs
+        # (dezren39/fleet#122): when a job is cancelled — the
+        # timeout_minutes case — GitHub discards the cancelled job's
+        # step log entirely, so this file copy, uploaded by the
+        # failure/cancellation step below, is the only record of how
+        # far execution got. pipefail is already set above, so the
+        # pipeline's exit status stays the command's, not tee's.
+        # $GITHUB_WORKSPACE, not the github.workspace expression,
+        # for the same container-path reason as the prep step.
+        command_log="$GITHUB_WORKSPACE/.fleet/fleet-command.log"
+        mkdir -p "$(dirname "$command_log")"
+        {
+          echo "Fleet dispatch: ${FLEET_DISPATCH_ID:-manual}"
+          echo "Target HEAD: $(git rev-parse HEAD)"
+        } >> "$command_log"
+        bash -euo pipefail -c "$FLEET_RUN_COMMAND" 2>&1 | tee -a "$command_log"
+
+    # Runs only when the job was cancelled while the command was
+    # still running: label the preserved log as partial, so a reader
+    # is never presented with a truncated log as if it were complete
+    # (the fallback marker dezren39/fleet#122 asks for).
+    - name: Mark command log when the job is cancelled
+      if: ${{ cancelled() }}
+      shell: bash
+      run: |
+        command_log="$GITHUB_WORKSPACE/.fleet/fleet-command.log"
+        if [ -f "$command_log" ]; then
+          printf '\n[fleet-command] job cancelled before the command finished; this log is partial — it holds everything the command wrote up to cancellation (dezren39/fleet#122).\n' >> "$command_log"
+        fi
+
+    - name: Upload command log on failure or cancellation
+      if: ${{ (failure() || cancelled()) && hashFiles('.fleet/fleet-command.log') != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: fleet-command-log
+        path: .fleet/fleet-command.log
+        retention-days: 14
+        if-no-files-found: ignore
 
     - name: Upload reusable Fleet output
       if: ${{ always() && hashFiles('target/fleet-output/**') != '' }}
