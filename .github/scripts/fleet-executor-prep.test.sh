@@ -18,18 +18,18 @@ export FLEET_PREP_SKIP
 load_want
 for section in nix rust bun cargotarget; do
   case ",$FLEET_PREP_SKIP," in
-    *",$section,"*)
-      if want "$section"; then
-        echo "FAIL: listed section '$section' was not skipped" >&2
-        exit 1
-      fi
-      ;;
-    *)
-      if ! want "$section"; then
-        echo "FAIL: unlisted section '$section' was skipped" >&2
-        exit 1
-      fi
-      ;;
+  *",$section,"*)
+    if want "$section"; then
+      echo "FAIL: listed section '$section' was not skipped" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    if ! want "$section"; then
+      echo "FAIL: unlisted section '$section' was skipped" >&2
+      exit 1
+    fi
+    ;;
   esac
 done
 
