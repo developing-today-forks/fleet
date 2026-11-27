@@ -64,7 +64,7 @@ if [ "$(uname -s)" != "Linux" ]; then
 fi
 
 skip=",${FLEET_PREP_SKIP:-},"
-want() { [ "${skip}" != *",$1,"* ]; }
+want() { [[ "${skip}" != *",$1,"* ]]; }
 
 # ---------------------------------------------------------------- nix
 # Root-only: creating users and writing /etc/nix/nix.conf needs it.
